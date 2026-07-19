@@ -29,6 +29,15 @@ const NAV = [
     ),
   },
   {
+    to: "/analytics",
+    label: "Analytics",
+    icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2z" />
+      </svg>
+    ),
+  },
+  {
     to: "/settings",
     label: "Settings",
     icon: (
@@ -41,9 +50,9 @@ const NAV = [
 ]
 
 const Sidebar = () => (
-  <aside className="hidden w-60 flex-shrink-0 flex-col border-r border-white/8 bg-[#0a0f1e] lg:flex">
+  <aside className="hidden w-60 flex-shrink-0 flex-col border-r border-subtle bg-[#0a0f1e] lg:flex">
     {/* Logo */}
-    <div className="flex items-center gap-2.5 px-5 py-5 border-b border-white/8">
+    <div className="flex items-center gap-2.5 px-5 py-5 border-b border-subtle">
       <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
         <svg className="h-4 w-4 text-white" fill="none" stroke="currentColor" strokeWidth={2.5} viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
@@ -73,7 +82,7 @@ const Sidebar = () => (
     </nav>
 
     {/* Bottom version tag */}
-    <div className="px-5 py-4 border-t border-white/8">
+    <div className="px-5 py-4 border-t border-subtle">
       <p className="text-xs text-slate-600">HiFi v1.0 · Phase 1</p>
     </div>
   </aside>

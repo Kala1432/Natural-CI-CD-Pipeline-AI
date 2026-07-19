@@ -46,10 +46,14 @@ const NewProject = () => {
     setSubmitError(null)
   }
 
-  const handleConnectGitHub = () => {
-    // Store current URL so we can return after OAuth
+  const handleConnectGitHub = async () => {
     sessionStorage.setItem("hifi_post_oauth_redirect", "/projects/new")
-    window.location.href = "/api/auth/github/login"
+    try {
+      const res = await api.get("/auth/github/login/url")
+      window.location.href = res.data.url
+    } catch (err) {
+      setSubmitError(err.message)
+    }
   }
 
   const handleSubmit = async (e) => {
@@ -83,16 +87,16 @@ const NewProject = () => {
       </div>
 
       {/* Progress steps */}
-      <div className="flex items-center gap-6 rounded-xl border border-white/8 bg-[#111827] px-6 py-4">
+      <div className="flex items-center gap-6 rounded-xl border border-subtle bg-[#111827] px-6 py-4">
         <Step n={1} label="Connect GitHub" active={currentStep === 1} done={currentStep > 1} />
-        <div className="h-px flex-1 bg-white/8" />
+        <div className="h-px flex-1 bg-white/10" />
         <Step n={2} label="Enter repo URL" active={currentStep === 2} done={currentStep > 2} />
-        <div className="h-px flex-1 bg-white/8" />
+        <div className="h-px flex-1 bg-white/10" />
         <Step n={3} label="Analyse & generate" active={currentStep === 3} done={false} />
       </div>
 
       {/* Step 1 — GitHub connect */}
-      <section className="rounded-xl border border-white/8 bg-[#111827] p-6">
+      <section className="rounded-xl border border-subtle bg-[#111827] p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="font-semibold text-white">GitHub Account</h2>
@@ -121,7 +125,7 @@ const NewProject = () => {
       </section>
 
       {/* Step 2 — Repo URL */}
-      <section className={`rounded-xl border bg-[#111827] p-6 transition-opacity ${!githubConnected ? "opacity-40 pointer-events-none" : "border-white/8"}`}>
+      <section className={`rounded-xl border bg-[#111827] p-6 transition-opacity ${!githubConnected ? "opacity-40 pointer-events-none" : "border-subtle"}`}>
         <h2 className="mb-4 font-semibold text-white">Repository URL</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

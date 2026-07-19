@@ -138,7 +138,7 @@ const Dashboard = () => {
             <Link
               key={p.id}
               to={`/projects/${p.id}`}
-              className="group rounded-xl border border-white/8 bg-[#111827] p-5 transition hover:border-indigo-500/40 hover:bg-[#131d35]"
+              className="group rounded-xl border border-subtle bg-[#111827] p-5 transition hover:border-indigo-500/40 hover:bg-[#131d35]"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">

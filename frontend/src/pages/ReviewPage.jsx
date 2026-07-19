@@ -113,7 +113,7 @@ const ReviewPage = () => {
             className={`rounded-xl border p-5 transition-colors ${
               step.approved
                 ? "border-indigo-500/40 bg-indigo-500/8"
-                : "border-white/8 bg-[#111827] opacity-60"
+                : "border-subtle bg-[#111827] opacity-60"
             }`}
           >
             <div className="flex items-start gap-4">
@@ -143,7 +143,7 @@ const ReviewPage = () => {
       </div>
 
       {/* Footer actions */}
-      <div className="flex items-center justify-between rounded-xl border border-white/8 bg-[#111827] px-5 py-4">
+      <div className="flex items-center justify-between rounded-xl border border-subtle bg-[#111827] px-5 py-4">
         <p className="text-sm text-slate-400">
           <span className="font-semibold text-white">{approvedCount}</span> of{" "}
           <span className="font-semibold text-white">{steps.length}</span> steps selected

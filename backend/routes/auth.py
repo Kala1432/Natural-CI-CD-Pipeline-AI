@@ -145,15 +145,32 @@ def google_signin():
     return jsonify({"access_token": token, "user": _user_payload(user)})
 
 
+@auth_bp.route("/github/login/url")
+@jwt_required()
+def github_login_url():
+    client_id = current_app.config.get("GITHUB_CLIENT_ID", "")
+    if not client_id:
+        return jsonify({"error": "GitHub OAuth is not configured. Add GITHUB_CLIENT_ID to .env"}), 503
+    backend_url = current_app.config.get("BACKEND_URL") or "http://localhost:5000"
+    redirect_uri = f"{backend_url.rstrip('/')}/api/auth/github/callback"
+    state = get_jwt_identity()
+    url = (
+        f"https://github.com/login/oauth/authorize"
+        f"?client_id={client_id}&scope=repo,read:org,workflow&redirect_uri={redirect_uri}&state={state}"
+    )
+    return jsonify({"url": url})
+
+
 @auth_bp.route("/github/login")
 @jwt_required()
 def github_login():
     client_id = current_app.config["GITHUB_CLIENT_ID"]
-    redirect_uri = url_for("auth.github_callback", _external=True)
+    backend_url = current_app.config.get("BACKEND_URL") or "http://localhost:5000"
+    redirect_uri = f"{backend_url.rstrip('/')}/api/auth/github/callback"
     state = get_jwt_identity()  # already a string
     return redirect(
         f"https://github.com/login/oauth/authorize"
-        f"?client_id={client_id}&scope=repo,read:org&redirect_uri={redirect_uri}&state={state}"
+        f"?client_id={client_id}&scope=repo,read:org,workflow&redirect_uri={redirect_uri}&state={state}"
     )
 
 

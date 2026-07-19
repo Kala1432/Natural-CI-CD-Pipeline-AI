@@ -1,6 +1,6 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from backend.models import User, Pipeline, WorkflowLog, ErrorReport
+from backend.models import User, Pipeline, WorkflowLog, ErrorReport, Repository
 from backend.db import db
 from backend.services.ai_service import AIService
 
@@ -52,5 +52,6 @@ def pipeline_history():
     user = User.query.get(user_id)
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
-    pipelines = Pipeline.query.join(User, Pipeline.repository_id == User.id, isouter=True).filter(Pipeline.repository_id == user_id).order_by(Pipeline.triggered_at.desc()).limit(20).all()
+    pipelines = Pipeline.query.join(Repository, Pipeline.repository_id == Repository.id).filter(Repository.user_id == user_id).order_by(Pipeline.triggered_at.desc()).limit(20).all()
     return jsonify({"pipelines": [{"id": p.id, "status": p.status, "stage": p.stage, "branch": p.branch, "triggered_at": p.triggered_at.isoformat() if p.triggered_at else None} for p in pipelines]})
+

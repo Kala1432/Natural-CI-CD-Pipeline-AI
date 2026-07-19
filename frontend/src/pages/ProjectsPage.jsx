@@ -100,7 +100,7 @@ const ProjectsPage = () => {
 
       {/* Empty */}
       {!loading && !error && projects.length === 0 && (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-white/8 bg-[#111827] py-20 text-center">
+        <div className="flex flex-col items-center justify-center rounded-xl border border-subtle bg-[#111827] py-20 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600/10 ring-1 ring-indigo-500/20 mb-4">
             <svg className="h-7 w-7 text-indigo-400" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" />
@@ -121,10 +121,10 @@ const ProjectsPage = () => {
 
       {/* Project list */}
       {!loading && !error && projects.length > 0 && (
-        <div className="overflow-hidden rounded-xl border border-white/8">
+        <div className="overflow-hidden rounded-xl border border-subtle">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-white/8 bg-white/3">
+              <tr className="border-b border-subtle bg-white/3">
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Repository</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Branch</th>

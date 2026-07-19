@@ -259,3 +259,76 @@ class TestWorkflowService:
         p = self._make_project_obj(stack, repo_name="awesome-app")
         yaml_out = build_workflow(p, self._make_steps(["build"]))
         assert "awesome-app" in yaml_out
+
+
+class TestPublishWorkflowEndpoint:
+    @patch("backend.services.github_service.GitHubService.commit_workflow_file")
+    def test_publish_commit_success(self, mock_commit, client, auth_headers, app):
+        mock_commit.return_value = {"html_url": "https://github.com/test/repo/commit/123"}
+
+        # Create a project and steps
+        pid, sids = _make_project(app, "phase5@test.com", stack={
+            "language": "python", "framework": "flask", "package_manager": "pip",
+            "has_tests": True, "test_framework": "pytest", "has_dockerfile": False,
+            "has_ci": False, "lint_config": None, "node_version": None, "python_version": "3.11",
+        })
+
+        # Generate the draft workflow
+        client.patch(f"/api/projects/{pid}/steps",
+                     json=[{"id": sids[0], "approved": True}],
+                     headers=auth_headers)
+        client.post(f"/api/projects/{pid}/generate", headers=auth_headers)
+
+        # Publish using commit
+        res = client.post(f"/api/projects/{pid}/publish", json={
+            "method": "commit",
+            "commit_message": "Add ci workflow"
+        }, headers=auth_headers)
+
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["workflow"]["pr_status"] == "merged"
+
+        with app.app_context():
+            p = Project.query.get(pid)
+            assert p.status == "pr_merged"
+            wf = GeneratedWorkflow.query.filter_by(project_id=pid).first()
+            assert wf.pr_status == "merged"
+            assert wf.pr_url == "https://github.com/test/repo/commit/123"
+
+    @patch("backend.services.github_service.GitHubService.create_branch")
+    @patch("backend.services.github_service.GitHubService.commit_workflow_file")
+    @patch("backend.services.github_service.GitHubService.create_pull_request")
+    def test_publish_pr_success(self, mock_pr, mock_commit, mock_branch, client, auth_headers, app):
+        mock_branch.return_value = {"ref": "refs/heads/hifi-ci-setup"}
+        mock_commit.return_value = {"html_url": "https://github.com/test/repo/commit/123"}
+        mock_pr.return_value = {"html_url": "https://github.com/test/repo/pull/1", "number": 1}
+
+        pid, sids = _make_project(app, "phase5@test.com", stack={
+            "language": "python", "framework": "flask", "package_manager": "pip",
+            "has_tests": True, "test_framework": "pytest", "has_dockerfile": False,
+            "has_ci": False, "lint_config": None, "node_version": None, "python_version": "3.11",
+        })
+
+        client.patch(f"/api/projects/{pid}/steps",
+                     json=[{"id": sids[0], "approved": True}],
+                     headers=auth_headers)
+        client.post(f"/api/projects/{pid}/generate", headers=auth_headers)
+
+        res = client.post(f"/api/projects/{pid}/publish", json={
+            "method": "pr",
+            "commit_message": "Add ci workflow",
+            "branch_name": "my-pr-branch"
+        }, headers=auth_headers)
+
+        assert res.status_code == 201
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["workflow"]["pr_status"] == "open"
+        assert data["workflow"]["pr_number"] == 1
+
+        with app.app_context():
+            p = Project.query.get(pid)
+            assert p.status == "pr_created"
+

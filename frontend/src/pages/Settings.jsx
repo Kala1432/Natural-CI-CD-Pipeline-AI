@@ -8,6 +8,7 @@ const Settings = () => {
   const [saving, setSaving] = useState(false)
   const [saveMsg, setSaveMsg] = useState(null)
   const [saveError, setSaveError] = useState(null)
+  const [githubError, setGithubError] = useState(null)
 
   const handleSave = async (e) => {
     e.preventDefault()
@@ -40,7 +41,7 @@ const Settings = () => {
       <h1 className="text-xl font-semibold text-white">Settings</h1>
 
       {/* Account */}
-      <section className="rounded-xl border border-white/8 bg-[#111827] p-6">
+      <section className="rounded-xl border border-subtle bg-[#111827] p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">Account</h2>
         <div className="space-y-3 text-sm">
           <div className="flex justify-between">
@@ -59,7 +60,7 @@ const Settings = () => {
       </section>
 
       {/* GitHub connection */}
-      <section className="rounded-xl border border-white/8 bg-[#111827] p-6">
+      <section className="rounded-xl border border-subtle bg-[#111827] p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">GitHub</h2>
         {user?.github_connected ? (
           <div className="flex items-center justify-between">
@@ -93,18 +94,31 @@ const Settings = () => {
               </div>
               <p className="text-sm text-slate-400">GitHub not connected</p>
             </div>
-            <a
-              href="/api/auth/github/login"
-              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
-            >
-              Connect GitHub
-            </a>
+            <div className="flex flex-col items-end gap-1.5">
+              {githubError && (
+                <p className="text-xs text-rose-400 max-w-xs text-right">{githubError}</p>
+              )}
+              <button
+                onClick={async () => {
+                  setGithubError(null)
+                  try {
+                    const res = await api.get("/auth/github/login/url")
+                    window.location.href = res.data.url
+                  } catch (err) {
+                    setGithubError(err.message)
+                  }
+                }}
+                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500"
+              >
+                Connect GitHub
+              </button>
+            </div>
           </div>
         )}
       </section>
 
       {/* Notifications */}
-      <section className="rounded-xl border border-white/8 bg-[#111827] p-6">
+      <section className="rounded-xl border border-subtle bg-[#111827] p-6">
         <h2 className="mb-4 text-sm font-semibold uppercase tracking-wider text-slate-400">Notifications</h2>
         <form onSubmit={handleSave} className="space-y-4">
           <div>

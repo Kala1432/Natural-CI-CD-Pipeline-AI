@@ -92,8 +92,8 @@ const WorkflowPage = () => {
       </div>
 
       {/* YAML viewer */}
-      <div className="rounded-xl border border-white/8 bg-[#0d1117] overflow-hidden">
-        <div className="flex items-center justify-between border-b border-white/8 px-4 py-2.5">
+      <div className="rounded-xl border border-subtle bg-[#0d1117] overflow-hidden">
+        <div className="flex items-center justify-between border-b border-subtle px-4 py-2.5">
           <span className="text-xs font-medium text-slate-400">YAML</span>
           <span className="text-xs text-slate-600">{workflow.filename}</span>
         </div>

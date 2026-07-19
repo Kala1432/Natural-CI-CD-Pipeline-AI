@@ -12,6 +12,9 @@ import ReviewPage from "./pages/ReviewPage"
 import WorkflowPage from "./pages/WorkflowPage"
 import Settings from "./pages/Settings"
 import GitHubSuccess from "./pages/GitHubSuccess"
+import PrConfirmPage from "./pages/PrConfirmPage"
+import Analytics from "./pages/Analytics"
+import LogsViewer from "./pages/LogsViewer"
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -106,6 +109,30 @@ const App = () => {
         element={
           <ProtectedRoute>
             <AppShell><WorkflowPage /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/projects/:id/pr"
+        element={
+          <ProtectedRoute>
+            <AppShell><PrConfirmPage /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analytics"
+        element={
+          <ProtectedRoute>
+            <AppShell><Analytics /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pipelines/:pipelineId/logs"
+        element={
+          <ProtectedRoute>
+            <AppShell><LogsViewer /></AppShell>
           </ProtectedRoute>
         }
       />

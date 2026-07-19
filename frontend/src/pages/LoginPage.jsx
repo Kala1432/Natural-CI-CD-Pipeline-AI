@@ -66,7 +66,7 @@ const LoginPage = () => {
           <p className="text-sm text-slate-400">Your CI/CD pipeline generator</p>
         </div>
 
-        <div className="rounded-2xl border border-white/8 bg-[#111827] p-8 shadow-2xl">
+        <div className="rounded-2xl border border-subtle bg-[#111827] p-8 shadow-2xl">
           {/* Google button */}
           {GOOGLE_CLIENT_ID && (
             <>

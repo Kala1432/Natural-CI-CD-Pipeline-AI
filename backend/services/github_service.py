@@ -155,3 +155,56 @@ class GitHubService:
         payload["name"] = workflow_name
         payload["on"] = ["push", "pull_request"] if project_type != "docker" else ["push"]
         return yaml.dump(payload, sort_keys=False)
+
+    def create_branch(self, owner: str, repo: str, new_branch: str, base_branch: str) -> dict:
+        """Create a new git branch in the repository pointing to the base branch's latest commit."""
+        # 1. Get SHA of base branch
+        ref_url = f"{self.BASE}/repos/{owner}/{repo}/git/ref/heads/{base_branch}"
+        resp = self._get(ref_url)
+        if not resp or not resp.ok:
+            logger.error("Failed to fetch base branch ref: %s", resp.text if resp else "No response")
+            return {"error": resp.text if resp else "Could not fetch base branch reference"}
+
+        sha = resp.json().get("object", {}).get("sha")
+        if not sha:
+            return {"error": "Could not find commit SHA for base branch"}
+
+        # 2. Create the new ref
+        create_url = f"{self.BASE}/repos/{owner}/{repo}/git/refs"
+        payload = {
+            "ref": f"refs/heads/{new_branch}",
+            "sha": sha
+        }
+
+        # Check if the branch already exists to avoid 422 error
+        check_url = f"{self.BASE}/repos/{owner}/{repo}/git/ref/heads/{new_branch}"
+        check_resp = self._get(check_url)
+        if check_resp and check_resp.ok:
+            logger.info("Branch %s already exists in %s/%s", new_branch, owner, repo)
+            return {"ref": f"refs/heads/{new_branch}", "sha": sha, "already_exists": True}
+
+        post_resp = requests.post(create_url, headers=self.headers, json=payload, timeout=15)
+        if post_resp.ok:
+            logger.info("Successfully created branch %s in %s/%s", new_branch, owner, repo)
+            return post_resp.json()
+        else:
+            logger.error("Failed to create branch: %s", post_resp.text)
+            return {"error": post_resp.text}
+
+    def create_pull_request(self, owner: str, repo: str, title: str, head_branch: str, base_branch: str, body: str) -> dict:
+        """Open a new Pull Request on GitHub."""
+        url = f"{self.BASE}/repos/{owner}/{repo}/pulls"
+        payload = {
+            "title": title,
+            "head": head_branch,
+            "base": base_branch,
+            "body": body
+        }
+        resp = requests.post(url, headers=self.headers, json=payload, timeout=15)
+        if resp.ok:
+            logger.info("Successfully created PR for %s/%s: %s", owner, repo, resp.json().get("html_url"))
+            return resp.json()
+        else:
+            logger.error("Failed to create PR: %s", resp.text)
+            return {"error": resp.text}
+

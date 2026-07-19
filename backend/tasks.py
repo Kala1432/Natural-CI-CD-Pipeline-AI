@@ -6,8 +6,9 @@ except Exception:  # pragma: no cover - depends on runtime packaging availabilit
     BackgroundScheduler = None
 
 
-def sync_repositories():
-    current_app.logger.info("Running scheduled repository sync")
+def sync_repositories(app):
+    with app.app_context():
+        app.logger.info("Running scheduled repository sync")
 
 
 def configure_scheduler(app):
@@ -21,7 +22,13 @@ def configure_scheduler(app):
 
     try:
         scheduler = BackgroundScheduler(daemon=True)
-        scheduler.add_job(func=sync_repositories, trigger="interval", minutes=10, id="repo-sync")
+        scheduler.add_job(
+            func=sync_repositories,
+            trigger="interval",
+            minutes=10,
+            id="repo-sync",
+            args=[app]
+        )
         scheduler.start()
         app.extensions["scheduler_started"] = True
         app.logger.info("Scheduler configured for Pipeline.sh")

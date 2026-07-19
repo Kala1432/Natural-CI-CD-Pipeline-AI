@@ -7,8 +7,8 @@ export default {
         panel: "#111827",
         accent: "#6366f1",
       },
-      borderOpacity: {
-        8: "0.08",
+      borderColor: {
+        subtle: "rgba(255,255,255,0.08)",
       },
     },
   },

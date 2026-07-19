@@ -18,8 +18,10 @@ const GitHubSuccess = () => {
     }
     localStorage.setItem("hifi_token", token)
     setAuthToken(token)
+    const redirect = sessionStorage.getItem("hifi_post_oauth_redirect") || "/dashboard"
+    sessionStorage.removeItem("hifi_post_oauth_redirect")
     refreshUser()
-      .then(() => navigate("/dashboard"))
+      .then(() => navigate(redirect))
       .catch((err) => setError(err.message))
   }, [searchParams, navigate, refreshUser])
 

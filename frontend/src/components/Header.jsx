@@ -35,7 +35,7 @@ const Header = () => {
   }
 
   return (
-    <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-white/8 bg-[#0a0f1e]/80 px-6 backdrop-blur-xl">
+    <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-subtle bg-[#0a0f1e]/80 px-6 backdrop-blur-xl">
       {/* Left: page context (empty for now, pages can portal content here) */}
       <div className="flex items-center gap-2 text-sm text-slate-400">
         <span className="text-white font-medium">HiFi</span>
@@ -64,7 +64,7 @@ const Header = () => {
               {/* Backdrop */}
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
               <div className="absolute right-0 top-full z-20 mt-1.5 w-52 rounded-xl border border-white/10 bg-[#111827] py-1 shadow-2xl">
-                <div className="border-b border-white/8 px-4 py-3">
+                <div className="border-b border-subtle px-4 py-3">
                   <p className="text-sm font-medium text-white truncate">{user.name || "User"}</p>
                   <p className="text-xs text-slate-500 truncate">{user.email}</p>
                 </div>

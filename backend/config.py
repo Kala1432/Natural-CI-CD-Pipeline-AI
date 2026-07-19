@@ -23,8 +23,11 @@ class Config:
 
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:5000")
 
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+    OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
+    OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     REDIS_CACHE_TTL = int(os.environ.get("REDIS_CACHE_TTL", 300))
 

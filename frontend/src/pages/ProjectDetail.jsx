@@ -87,7 +87,7 @@ const StackPill = ({ label, value }) => {
 }
 
 const StackPanel = ({ stack }) => (
-  <div className="rounded-xl border border-white/8 bg-[#111827] p-5">
+  <div className="rounded-xl border border-subtle bg-[#111827] p-5">
     <h3 className="mb-3 text-sm font-semibold uppercase tracking-wider text-slate-400">Detected Stack</h3>
     <div className="space-y-1.5">
       <StackPill label="Language"        value={stack.language} />
@@ -115,7 +115,7 @@ const STEP_ICONS = {
 }
 
 const StepCard = ({ step }) => (
-  <div className={`rounded-xl border p-5 transition ${step.recommended ? "border-indigo-500/30 bg-indigo-500/5" : "border-white/8 bg-[#111827]"}`}>
+  <div className={`rounded-xl border p-5 transition ${step.recommended ? "border-indigo-500/30 bg-indigo-500/5" : "border-subtle bg-[#111827]"}`}>
     <div className="flex items-start gap-3">
       <span className="text-xl">{STEP_ICONS[step.step_key] || "⚙️"}</span>
       <div className="flex-1 min-w-0">
@@ -323,7 +323,7 @@ const ProjectDetail = () => {
             </div>
 
             {steps.length === 0 ? (
-              <div className="rounded-xl border border-white/8 bg-[#111827] p-8 text-center text-sm text-slate-400">
+              <div className="rounded-xl border border-subtle bg-[#111827] p-8 text-center text-sm text-slate-400">
                 No steps generated yet.
               </div>
             ) : (

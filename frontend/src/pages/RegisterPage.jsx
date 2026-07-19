@@ -70,7 +70,7 @@ const RegisterPage = () => {
           <p className="text-sm text-slate-400">Start automating your CI/CD pipelines</p>
         </div>
 
-        <div className="rounded-2xl border border-white/8 bg-[#111827] p-8 shadow-2xl">
+        <div className="rounded-2xl border border-subtle bg-[#111827] p-8 shadow-2xl">
           {GOOGLE_CLIENT_ID && (
             <>
               <div ref={googleBtnRef} className="w-full" />
