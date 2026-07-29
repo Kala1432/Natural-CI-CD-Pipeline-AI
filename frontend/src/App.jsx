@@ -15,6 +15,8 @@ import GitHubSuccess from "./pages/GitHubSuccess"
 import PrConfirmPage from "./pages/PrConfirmPage"
 import Analytics from "./pages/Analytics"
 import LogsViewer from "./pages/LogsViewer"
+import VerifyEmailPage from "./pages/VerifyEmailPage"
+import ForgotPasswordPage from "./pages/ForgotPasswordPage"
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -60,6 +62,14 @@ const App = () => {
       <Route
         path="/register"
         element={user ? <Navigate to="/dashboard" replace /> : <RegisterPage />}
+      />
+      <Route
+        path="/verify-email"
+        element={user ? <Navigate to="/dashboard" replace /> : <VerifyEmailPage />}
+      />
+      <Route
+        path="/forgot-password"
+        element={user ? <Navigate to="/dashboard" replace /> : <ForgotPasswordPage />}
       />
       <Route path="/auth/github/success" element={<GitHubSuccess />} />
 

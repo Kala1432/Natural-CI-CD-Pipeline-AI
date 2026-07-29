@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { Link, useNavigate } from "react-router-dom"
+import { Link, useLocation, useNavigate } from "react-router-dom"
 import { useAuth } from "../hooks/AuthContext"
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ""
@@ -7,6 +7,7 @@ const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || ""
 const LoginPage = () => {
   const { login, googleSignIn } = useAuth()
   const navigate = useNavigate()
+  const location = useLocation()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState(null)
@@ -22,7 +23,8 @@ const LoginPage = () => {
         setLoading(true)
         try {
           await googleSignIn(response.credential)
-          navigate("/dashboard")
+          const destination = location.state?.from?.pathname || "/dashboard"
+          navigate(destination, { replace: true })
         } catch (err) {
           setError(err.message)
         } finally {
@@ -36,7 +38,7 @@ const LoginPage = () => {
       width: "100%",
       text: "signin_with",
     })
-  }, [googleSignIn, navigate])
+  }, [googleSignIn, navigate, location.state])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -44,9 +46,14 @@ const LoginPage = () => {
     setLoading(true)
     try {
       await login(email, password)
-      navigate("/dashboard")
+      const destination = location.state?.from?.pathname || "/dashboard"
+      navigate(destination, { replace: true })
     } catch (err) {
-      setError(err.message)
+      if (err.message === "Verify your email before signing in.") {
+        navigate("/verify-email", { state: { email } })
+      } else {
+        setError(err.message)
+      }
     } finally {
       setLoading(false)
     }
@@ -63,7 +70,11 @@ const LoginPage = () => {
             </svg>
           </div>
           <h1 className="text-2xl font-semibold text-white">Sign in to HiFi</h1>
-          <p className="text-sm text-slate-400">Your CI/CD pipeline generator</p>
+          <p className="text-center text-sm text-slate-400">
+            {location.state?.switchingAccount
+              ? "Sign in with another user’s verified email"
+              : "Your CI/CD pipeline generator"}
+          </p>
         </div>
 
         <div className="rounded-2xl border border-subtle bg-[#111827] p-8 shadow-2xl">
@@ -92,7 +103,12 @@ const LoginPage = () => {
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-300">Password</label>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label className="block text-sm font-medium text-slate-300">Password</label>
+                <Link to="/forgot-password" className="text-xs text-indigo-400 hover:text-indigo-300">
+                  Forgot password?
+                </Link>
+              </div>
               <input
                 type="password"
                 value={password}
@@ -123,6 +139,9 @@ const LoginPage = () => {
             <Link to="/register" className="text-indigo-400 hover:text-indigo-300">
               Create one
             </Link>
+          </p>
+          <p className="mt-3 text-center text-xs text-slate-600">
+            Every user has separate GitHub connections, projects, and pipelines.
           </p>
         </div>
       </div>

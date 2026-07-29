@@ -1,0 +1,61 @@
+{
+  "family": "pipeline-sh",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "ecsTaskExecutionRole",
+  "taskRoleArn": "pipeline-sh-task-role",
+  "containerDefinitions": [
+    {
+      "name": "pipeline-sh",
+      "image": "pipeline-sh:deployment-placeholder",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 5000,
+          "hostPort": 5000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "PORT", "value": "5000"},
+        {"name": "LOG_LEVEL", "value": "INFO"},
+        {"name": "SCHEDULER_ENABLED", "value": "false"},
+        {"name": "GUNICORN_WORKERS", "value": "2"},
+        {"name": "GUNICORN_THREADS", "value": "4"}
+      ],
+      "secrets": [
+        {"name": "DATABASE_URL", "valueFrom": "/pipeline-sh/production/DATABASE_URL"},
+        {"name": "REDIS_URL", "valueFrom": "/pipeline-sh/production/REDIS_URL"},
+        {"name": "SECRET_KEY", "valueFrom": "/pipeline-sh/production/SECRET_KEY"},
+        {"name": "JWT_SECRET_KEY", "valueFrom": "/pipeline-sh/production/JWT_SECRET_KEY"},
+        {"name": "GITHUB_CLIENT_ID", "valueFrom": "/pipeline-sh/production/GITHUB_CLIENT_ID"},
+        {"name": "GITHUB_CLIENT_SECRET", "valueFrom": "/pipeline-sh/production/GITHUB_CLIENT_SECRET"},
+        {"name": "SMTP_USERNAME", "valueFrom": "/pipeline-sh/production/SMTP_USERNAME"},
+        {"name": "SMTP_APP_PASSWORD", "valueFrom": "/pipeline-sh/production/SMTP_APP_PASSWORD"},
+        {"name": "EMAIL_FROM", "valueFrom": "/pipeline-sh/production/EMAIL_FROM"},
+        {"name": "FRONTEND_URL", "valueFrom": "/pipeline-sh/production/FRONTEND_URL"},
+        {"name": "BACKEND_URL", "valueFrom": "/pipeline-sh/production/BACKEND_URL"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/pipeline-sh",
+          "awslogs-region": "ap-south-1",
+          "awslogs-stream-prefix": "app"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/api/health', timeout=4)\" || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 60
+      }
+    }
+  ]
+}

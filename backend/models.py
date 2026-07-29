@@ -35,9 +35,23 @@ class User(db.Model):
     name = db.Column(db.String(120), nullable=True)
     avatar_url = db.Column(db.String(512), nullable=True)
     role = db.Column(db.String(32), default="developer")
+    email_verified = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     profile = db.relationship("UserProfile", uselist=False, backref="user", cascade="all, delete-orphan")
+    email_otps = db.relationship("EmailOTP", backref="user", cascade="all, delete-orphan")
+
+
+class EmailOTP(db.Model):
+    __tablename__ = "email_otps"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    purpose = db.Column(db.String(32), nullable=False)
+    code_hash = db.Column(db.String(64), nullable=False)
+    attempts = db.Column(db.Integer, default=0, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    consumed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
 
 
 class UserProfile(db.Model):

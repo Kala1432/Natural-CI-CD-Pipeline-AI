@@ -48,8 +48,12 @@ const RegisterPage = () => {
     }
     setLoading(true)
     try {
-      await register(email, password, name)
-      navigate("/dashboard")
+      const result = await register(email, password, name)
+      if (result.requires_verification) {
+        navigate("/verify-email", { state: { email: result.email } })
+      } else {
+        navigate("/dashboard")
+      }
     } catch (err) {
       setError(err.message)
     } finally {

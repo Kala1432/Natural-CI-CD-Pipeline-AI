@@ -26,6 +26,10 @@ def create_app(test_config: dict = None):
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
+    if app.config.get("TESTING") and (
+        not test_config or "EMAIL_VERIFICATION_REQUIRED" not in test_config
+    ):
+        app.config["EMAIL_VERIFICATION_REQUIRED"] = False
 
     log_level = getattr(logging, app.config.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
     logging.basicConfig(
@@ -56,7 +60,9 @@ def create_app(test_config: dict = None):
     for blueprint, prefix in blueprints:
         app.register_blueprint(blueprint, url_prefix=prefix)
 
-    if not app.extensions.get("scheduler_configured"):
+    if app.config.get("SCHEDULER_ENABLED") and not app.extensions.get(
+        "scheduler_configured"
+    ):
         configure_scheduler(app)
         app.extensions["scheduler_configured"] = True
 

@@ -40,6 +40,14 @@ export function AuthProvider({ children }) {
 
   const register = useCallback(async (email, password, name) => {
     const res = await api.post("/auth/register", { email, password, name })
+    if (res.data.access_token) {
+      _storeSession(res.data.access_token, res.data.user)
+    }
+    return res.data
+  }, [_storeSession])
+
+  const verifyEmail = useCallback(async (email, otp) => {
+    const res = await api.post("/auth/verify-email", { email, otp })
     _storeSession(res.data.access_token, res.data.user)
     return res.data.user
   }, [_storeSession])
@@ -63,7 +71,7 @@ export function AuthProvider({ children }) {
   }, [])
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, googleSignIn, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, verifyEmail, googleSignIn, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   )

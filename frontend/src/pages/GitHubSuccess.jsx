@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
-import { setAuthToken } from "../api"
-import api from "../api"
 import { useAuth } from "../hooks/AuthContext"
 
 const GitHubSuccess = () => {
@@ -11,13 +9,16 @@ const GitHubSuccess = () => {
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    const token = searchParams.get("token")
-    if (!token) {
-      setError("No token received from GitHub OAuth.")
+    const oauthError = searchParams.get("error")
+    const connected = searchParams.get("connected")
+    if (oauthError) {
+      setError(oauthError)
       return
     }
-    localStorage.setItem("hifi_token", token)
-    setAuthToken(token)
+    if (connected !== "1") {
+      setError("GitHub did not confirm the connection.")
+      return
+    }
     const redirect = sessionStorage.getItem("hifi_post_oauth_redirect") || "/dashboard"
     sessionStorage.removeItem("hifi_post_oauth_redirect")
     refreshUser()

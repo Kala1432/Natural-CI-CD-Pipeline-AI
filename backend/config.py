@@ -25,11 +25,29 @@ class Config:
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
     BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:5000")
 
+    SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    SMTP_PORT = int(os.environ.get("SMTP_PORT", 465))
+    SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
+    SMTP_APP_PASSWORD = os.environ.get("SMTP_APP_PASSWORD", "")
+    EMAIL_FROM = os.environ.get("EMAIL_FROM", SMTP_USERNAME)
+    OTP_EXPIRY_MINUTES = int(os.environ.get("OTP_EXPIRY_MINUTES", 10))
+    OTP_RESEND_COOLDOWN_SECONDS = int(os.environ.get("OTP_RESEND_COOLDOWN_SECONDS", 60))
+    OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", 5))
+    EMAIL_VERIFICATION_REQUIRED = os.environ.get(
+        "EMAIL_VERIFICATION_REQUIRED", "true"
+    ).lower() in ("1", "true", "yes")
+    MAIL_SUPPRESS_SEND = os.environ.get("MAIL_SUPPRESS_SEND", "false").lower() in (
+        "1", "true", "yes"
+    )
+
     OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
     OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
     OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
     REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
     REDIS_CACHE_TTL = int(os.environ.get("REDIS_CACHE_TTL", 300))
+    SCHEDULER_ENABLED = os.environ.get("SCHEDULER_ENABLED", "true").lower() in (
+        "1", "true", "yes"
+    )
 
     AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
     AWS_S3_BUCKET = os.environ.get("AWS_S3_BUCKET", "pipeline-sh-artifacts")
