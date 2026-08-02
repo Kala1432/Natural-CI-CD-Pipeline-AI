@@ -30,7 +30,7 @@ Pipeline.sh is a full-stack AI-powered DevOps automation platform built with Pyt
    ```bash
    docker compose exec backend flask db upgrade
    ```
-4. Access the frontend at `http://localhost:3000` and API at `http://localhost:5000/api/health`.
+4. Access the frontend at `http://localhost:3000` and API at `http://localhost:5001/api/health`.
 
 ## Development
 - Backend: `cd backend && pip install -r requirements.txt`
