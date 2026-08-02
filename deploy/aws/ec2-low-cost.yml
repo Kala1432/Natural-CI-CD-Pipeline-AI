@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Low-cost single-EC2 deployment for Pipeline.sh
+
+Parameters:
+  GitHubOwner:
+    Type: String
+    Default: Kala1432
+  GitHubRepository:
+    Type: String
+    Default: Natural-CI-CD-Pipeline-AI
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small]
+  RepositoryUrl:
+    Type: String
+    Default: https://github.com/Kala1432/Natural-CI-CD-Pipeline-AI.git
+
+Resources:
+  AppVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags: [{Key: Name, Value: pipeline-sh}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref AppVpc
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref AppVpc
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{Key: Name, Value: pipeline-sh-public}]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref AppVpc
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP access for Pipeline.sh
+      VpcId: !Ref AppVpc
+      SecurityGroupIngress:
+        - {IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0}
+      SecurityGroupEgress:
+        - {IpProtocol: "-1", CidrIp: 0.0.0.0/0}
+
+  AppSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: pipeline-sh/production
+      Description: Runtime settings for Pipeline.sh
+      GenerateSecretString:
+        SecretStringTemplate: >-
+          {"GITHUB_CLIENT_ID":"","GITHUB_CLIENT_SECRET":"","GITHUB_WEBHOOK_SECRET":"",
+          "SMTP_HOST":"smtp.gmail.com","SMTP_PORT":"465","SMTP_USERNAME":"",
+          "SMTP_APP_PASSWORD":"","EMAIL_FROM":"","OPENAI_API_KEY":""}
+        GenerateStringKey: POSTGRES_PASSWORD
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: ReadPipelineSecret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref AppSecret
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  GitHubDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Federated: !Ref GitHubOidcProvider}
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubOwner}/${GitHubRepository}:*
+      Policies:
+        - PolicyName: DeployThroughSSM
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+                  - !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              - Effect: Allow
+                Action: [ssm:GetCommandInvocation, ssm:ListCommandInvocations]
+                Resource: "*"
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: DefaultRoute
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref AppSecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 16
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+      Tags: [{Key: Name, Value: pipeline-sh}]
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf install -y docker git jq
+          systemctl enable --now docker
+          fallocate -l 2G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+          mkdir -p /opt/pipeline-sh
+          git clone --branch main ${RepositoryUrl} /opt/pipeline-sh/repository
+          cat >/opt/pipeline-sh/deploy.sh <<'SCRIPT'
+          #!/bin/bash
+          set -euo pipefail
+          cd /opt/pipeline-sh/repository
+          git fetch origin main
+          git reset --hard origin/main
+          SECRET_JSON=$(aws secretsmanager get-secret-value --secret-id pipeline-sh/production --region ${AWS::Region} --query SecretString --output text)
+          POSTGRES_PASSWORD=$(jq -r '.POSTGRES_PASSWORD' <<<"$SECRET_JSON")
+          SECRET_KEY=$(printf 'flask-%s' "$POSTGRES_PASSWORD" | sha256sum | cut -d' ' -f1)
+          JWT_SECRET_KEY=$(printf 'jwt-%s' "$POSTGRES_PASSWORD" | sha256sum | cut -d' ' -f1)
+          PUBLIC_IP=$(curl -fsS https://checkip.amazonaws.com | tr -d '\n')
+          docker network inspect pipeline-sh >/dev/null 2>&1 || docker network create pipeline-sh
+          docker volume inspect pipeline-sh-db >/dev/null 2>&1 || docker volume create pipeline-sh-db
+          docker rm -f pipeline-sh-db pipeline-sh-redis pipeline-sh-app 2>/dev/null || true
+          docker run -d --name pipeline-sh-db --restart unless-stopped --network pipeline-sh \
+            -v pipeline-sh-db:/var/lib/postgresql/data -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" -e POSTGRES_DB=pipeline_sh postgres:15
+          docker run -d --name pipeline-sh-redis --restart unless-stopped --network pipeline-sh redis:7
+          until docker exec pipeline-sh-db pg_isready -U postgres; do sleep 2; done
+          docker build -f Dockerfile.production -t pipeline-sh:latest .
+          ENV_FILE=/opt/pipeline-sh/runtime.env
+          umask 077
+          {
+            echo "DATABASE_URL=postgresql://postgres:$POSTGRES_PASSWORD@pipeline-sh-db:5432/pipeline_sh"
+            echo "REDIS_URL=redis://pipeline-sh-redis:6379/0"
+            echo "SECRET_KEY=$SECRET_KEY"
+            echo "JWT_SECRET_KEY=$JWT_SECRET_KEY"
+            echo "FRONTEND_URL=http://$PUBLIC_IP"
+            echo "BACKEND_URL=http://$PUBLIC_IP"
+            echo "SCHEDULER_ENABLED=true"
+            jq -r 'to_entries[] | select(.key != "POSTGRES_PASSWORD") | "\(.key)=\(.value)"' <<<"$SECRET_JSON"
+          } >"$ENV_FILE"
+          docker run -d --name pipeline-sh-app --restart unless-stopped --network pipeline-sh \
+            --env-file "$ENV_FILE" -p 80:5000 pipeline-sh:latest
+          docker image prune -f
+          SCRIPT
+          chmod 700 /opt/pipeline-sh/deploy.sh
+          /opt/pipeline-sh/deploy.sh
+
+Outputs:
+  InstanceId:
+    Value: !Ref AppInstance
+  PublicUrl:
+    Value: !Sub http://${AppInstance.PublicIp}
+  GitHubDeployRoleArn:
+    Value: !GetAtt GitHubDeployRole.Arn
+  RuntimeSecret:
+    Value: !Ref AppSecret
