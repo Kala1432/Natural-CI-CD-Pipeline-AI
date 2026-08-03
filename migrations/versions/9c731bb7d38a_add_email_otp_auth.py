@@ -33,7 +33,8 @@ def upgrade():
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_email_otps_user_id", "email_otps", ["user_id"])
-    op.alter_column("users", "email_verified", server_default=None)
+    if op.get_bind().dialect.name != "sqlite":
+        op.alter_column("users", "email_verified", server_default=None)
 
 
 def downgrade():

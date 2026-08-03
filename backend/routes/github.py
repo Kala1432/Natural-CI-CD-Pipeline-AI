@@ -12,11 +12,17 @@ github_bp = Blueprint("github", __name__)
 @jwt_required()
 def list_repositories():
     user_id = get_jwt_identity()
-    user = User.query.get(user_id)
+    user = db.session.get(User, int(user_id)) if user_id and str(user_id).isdigit() else None
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
 
     token = request.headers.get("X-GitHub-Token")
+    if not token and user.profile:
+        token = user.profile.github_access_token
+
+    if not token:
+        return jsonify({"error": "GitHub token not provided and GitHub account not connected"}), 400
+
     github = GitHubService(token)
     repos = github.list_user_repositories()
     # store available repos in local user repo cache
@@ -36,10 +42,19 @@ def list_repositories():
 @jwt_required()
 def connect_repository():
     data = request.get_json() or {}
+    user_id = get_jwt_identity()
+    user = db.session.get(User, int(user_id)) if user_id and str(user_id).isdigit() else None
+
     token = request.headers.get("X-GitHub-Token")
+    if not token and user and user.profile:
+        token = user.profile.github_access_token
+
     repo_full_name = data.get("full_name")
     if not repo_full_name:
         return jsonify({"error": "Repository full_name is required"}), 400
+    if not token:
+        return jsonify({"error": "GitHub not connected"}), 403
+
     github = GitHubService(token)
     repo_data = github.get_repository(repo_full_name)
     if not repo_data:

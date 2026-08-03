@@ -30,7 +30,7 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=True)
-    github_id = db.Column(db.String(64), unique=True, nullable=True)
+    github_id = db.Column(db.String(64), nullable=True)
     google_id = db.Column(db.String(128), unique=True, nullable=True)
     name = db.Column(db.String(120), nullable=True)
     avatar_url = db.Column(db.String(512), nullable=True)
@@ -40,6 +40,18 @@ class User(db.Model):
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     profile = db.relationship("UserProfile", uselist=False, backref="user", cascade="all, delete-orphan")
     email_otps = db.relationship("EmailOTP", backref="user", cascade="all, delete-orphan")
+    github_connections = db.relationship("GithubConnection", backref="user", cascade="all, delete-orphan")
+
+
+class GithubConnection(db.Model):
+    """Link a user to a GitHub account."""
+    __tablename__ = "github_connections"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
+    github_id = db.Column(db.String(64), nullable=False)
+    access_token = db.Column(db.String(512), nullable=True)
+    login = db.Column(db.String(128), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 
 class EmailOTP(db.Model):
@@ -186,7 +198,6 @@ class CloudDeployment(db.Model):
 # ---------------------------------------------------------------------------
 # Phase 2 models
 # ---------------------------------------------------------------------------
-
 class Project(db.Model):
     __tablename__ = "projects"
     id = db.Column(db.Integer, primary_key=True)
@@ -320,7 +331,6 @@ class SimulationRun(db.Model):
 # ---------------------------------------------------------------------------
 # Legacy models (kept for backward compat)
 # ---------------------------------------------------------------------------
-
 class DeploymentServer(db.Model):
     __tablename__ = "deployment_servers"
     id = db.Column(db.Integer, primary_key=True)

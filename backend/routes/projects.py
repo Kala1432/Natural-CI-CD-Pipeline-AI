@@ -290,7 +290,7 @@ def publish_workflow(project_id):
     owner = project.repo_owner
     repo = project.repo_name
     default_branch = project.default_branch or "main"
-    user = User.query.get(user_id)
+    user = db.session.get(User, user_id)
     author_name = (user.name if user and user.name else None) or (user.email.split("@")[0] if user and user.email else None) or "Pipeline.sh"
     author_email = (user.email if user and user.email else None) or "pipeline@example.com"
 

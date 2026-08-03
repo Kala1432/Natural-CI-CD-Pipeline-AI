@@ -10,7 +10,7 @@ def _set_status(app, project_id: int, status: str, error: str = None):
     with app.app_context():
         from backend.db import db
         from backend.models import Project
-        p = Project.query.get(project_id)
+        p = db.session.get(Project, project_id)
         if p:
             p.status = status
             if error is not None:
@@ -23,7 +23,7 @@ def _save_stack_and_steps(app, project_id: int, stack: dict, steps: list):
     with app.app_context():
         from backend.db import db
         from backend.models import AutomationStep, Project
-        p = Project.query.get(project_id)
+        p = db.session.get(Project, project_id)
         if not p:
             return
         p.detected_stack = stack
@@ -61,8 +61,9 @@ def analyze_repo(app, project_id: int, github_token: str):
 
     try:
         with app.app_context():
+            from backend.db import db
             from backend.models import Project
-            project = Project.query.get(project_id)
+            project = db.session.get(Project, project_id)
             if not project:
                 return
             owner = project.repo_owner

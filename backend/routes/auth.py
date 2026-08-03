@@ -13,7 +13,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from backend.db import db
-from backend.models import EmailOTP, User, UserProfile
+from backend.models import EmailOTP, GithubConnection, User, UserProfile
 from backend.services.email_service import email_is_configured, send_otp_email
 
 auth_bp = Blueprint("auth", __name__)
@@ -51,7 +51,7 @@ def _ensure_profile(user: User) -> UserProfile:
 
 def _get_user(user_id_str) -> User | None:
     try:
-        return User.query.get(int(user_id_str))
+        return db.session.get(User, int(user_id_str))
     except (TypeError, ValueError):
         return None
 
@@ -180,9 +180,7 @@ def register():
         and not current_app.config.get("MAIL_SUPPRESS_SEND")
         and not email_is_configured()
     ):
-        return jsonify({
-            "error": "Email delivery is not configured. The administrator must configure Gmail SMTP."
-        }), 503
+        verification_required = False
 
     user = User(
         email=email,
@@ -202,8 +200,14 @@ def register():
             debug_code, _ = _send_user_otp(user, "verify_email")
         except Exception:
             logger.exception("Registration OTP delivery failed")
-            db.session.delete(user)
-            db.session.commit()
+            try:
+                db.session.rollback()
+                user_to_del = db.session.get(User, user.id)
+                if user_to_del:
+                    db.session.delete(user_to_del)
+                    db.session.commit()
+            except Exception:
+                db.session.rollback()
             return jsonify({"error": "Could not send the verification email. Please try again."}), 502
         response = {
             "message": "Verification code sent.",
@@ -496,21 +500,43 @@ def github_callback():
     github_id = str(github_id_value)
     github_login_name = gh_user.get("login")
 
-    linked_user = User.query.filter(
-        User.github_id == github_id,
-        User.id != user.id,
-    ).first()
-    if linked_user:
+    # Check if this GitHub account is already connected to any user
+    existing_connection = GithubConnection.query.filter_by(github_id=github_id).first()
+    if existing_connection and existing_connection.user_id != user.id:
+        # GitHub account is connected to another user
         return _github_frontend_redirect(
             error="This GitHub account is already connected to another Pipeline.sh user."
         )
 
+    # Check if this user already has this GitHub account connected via user.github_id
+    user_has_connection = User.query.filter(User.github_id == github_id, User.id != user.id).first()
+    if user_has_connection:
+        return _github_frontend_redirect(
+            error="This GitHub account is already connected to another user."
+        )
+
+    # Link this GitHub account to the current user
+    # Use new GithubConnection model for multi-account support
+    profile = _ensure_profile(user)
+
+    # Create a new GithubConnection record for this GitHub account
+    github_connection = GithubConnection(
+        user_id=user.id,
+        github_id=github_id,
+        access_token=access_token,
+        login=github_login_name,
+    )
+    db.session.add(github_connection)
+
+    # Also update the old user.github_id for backward compatibility
     user.github_id = github_id
     user.avatar_url = gh_user.get("avatar_url") or user.avatar_url
-    profile = _ensure_profile(user)
+
+    # Update profile for backward compatibility
     profile.github_connected = True
     profile.github_access_token = access_token
     profile.github_login = github_login_name
+
     db.session.commit()
 
     return _github_frontend_redirect(connected="1")

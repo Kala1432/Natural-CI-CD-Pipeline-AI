@@ -49,7 +49,7 @@ def analyze_pipeline():
 @jwt_required()
 def pipeline_history():
     user_id = get_jwt_identity()
-    user = User.query.get(user_id)
+    user = db.session.get(User, int(user_id)) if user_id and str(user_id).isdigit() else None
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
     pipelines = Pipeline.query.join(Repository, Pipeline.repository_id == Repository.id).filter(Repository.user_id == user_id).order_by(Pipeline.triggered_at.desc()).limit(20).all()

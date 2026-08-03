@@ -1,6 +1,10 @@
 import logging
 import os
+import sys
 from datetime import datetime, timezone
+
+# Ensure project root is in sys.path when running app directly
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dotenv import load_dotenv
 from flask import Flask, jsonify
@@ -39,14 +43,28 @@ def create_app(test_config: dict = None):
     app.logger.setLevel(log_level)
 
     CORS(app, supports_credentials=True, origins=[
+        r"http://localhost:\d+",
+        r"http://127\.0\.0\.1:\d+",
         "http://localhost:3000",
+        "http://127.0.0.1:3000",
         "http://localhost:4173",
         "http://127.0.0.1:5000",
         "http://localhost:5000",
     ])
     JWTManager(app)
+
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        from werkzeug.exceptions import HTTPException
+        if isinstance(e, HTTPException):
+            return jsonify({"error": e.description}), e.code
+        app.logger.exception("Unhandled exception on request: %s", e)
+        return jsonify({"error": str(e) if app.debug else "Internal server error"}), 500
     db.init_app(app)
     Migrate(app, db)
+
+    with app.app_context():
+        db.create_all()
 
     blueprints = [
         (auth_bp, "/api/auth"),

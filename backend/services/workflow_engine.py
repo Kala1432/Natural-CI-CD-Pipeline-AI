@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
+from backend.db import db
 from backend.models import Repository, User
 from backend.services.cache_service import CacheService
 from backend.services.github_service import GitHubService
@@ -24,36 +25,38 @@ def detect_tech_stack(repo: dict) -> Dict[str, bool]:
 
     name = str(repo.get("name", "")).lower()
     description = str(repo.get("description", "")).lower()
-    has_dockerfile = any(token in description for token in ["dockerfile", "docker compose"])
+    language = str(repo.get("language", "")).lower()
+    topics = [str(topic).lower() for topic in repo.get("topics", [])]
 
-    flags = {tech: False for tech in allowed_keys}
-    if "python" in name or "py" in description or has_dockerfile:
-        flags["python"] = True
-    if "flask" in description or "flask_" in name:
-        flags["flask"] = True
-    if "django" in description or "django_" in name:
-        flags["django"] = True
-    if "fastapi" in description or "fastapi_" in name:
-        flags["fastapi"] = True
-    if "node" in name or "npm" in description:
-        flags["node"] = True
-    if "react" in name or "react_" in name:
-        flags["react"] = True
-    if "vite" in description or "vite_" in name:
-        flags["vite"] = True
-    if has_dockerfile:
-        flags["docker"] = True
+    combined = f"{name} {description} {' '.join(topics)}"
 
-    return flags
+    detected = {
+        "python": language == "python" or any(k in combined for k in ["python", "flask", "django", "fastapi"]),
+        "flask": "flask" in combined,
+        "django": "django" in combined,
+        "fastapi": "fastapi" in combined,
+        "node": language in ["javascript", "typescript"] or any(k in combined for k in ["node", "react", "next", "vue", "express"]),
+        "react": "react" in combined,
+        "vite": "vite" in combined,
+        "docker": "docker" in combined or "dockerfile" in combined,
+    }
+    return {k: v for k, v in detected.items() if k in allowed_keys}
 
 
-def validate_yaml(yaml_str: str) -> List[str]:
-    """Return syntax errors for workflow YAML content."""
+def validate_yaml(yaml_content: str) -> List[str]:
     errors = []
     try:
-        yaml.safe_load(yaml_str)
-    except yaml.YAMLError as exc:
-        errors.append(str(exc))
+        data = yaml.safe_load(yaml_content)
+        if not isinstance(data, dict):
+            return ["YAML content must produce a top-level dictionary"]
+        if "name" not in data:
+            errors.append("Missing required root field: 'name'")
+        if "on" not in data:
+            errors.append("Missing required root field: 'on'")
+        if "jobs" not in data or not isinstance(data.get("jobs"), dict):
+            errors.append("Missing required root dictionary: 'jobs'")
+    except Exception as exc:
+        errors.append(f"Invalid YAML syntax: {exc}")
     return errors
 
 
@@ -62,12 +65,10 @@ def _cache_key(repo_id: int) -> str:
 
 
 class WorkflowEngine:
-    """High-level workflow orchestration for repository analysis and workflow generation."""
-
-    def __init__(self, current_user: Optional[User], github_service: Optional[GitHubService] = None):
+    def __init__(self, current_user: User, github_service: GitHubService, cache_service: Optional[CacheService] = None):
         self.user = current_user
-        self.github = github_service or GitHubService("")
-        self.cache = CacheService()
+        self.github = github_service
+        self.cache = cache_service or CacheService()
 
     def get_available_templates(self) -> List[str]:
         return list(GitHubService.get_templates().keys())
@@ -79,7 +80,7 @@ class WorkflowEngine:
             value = cached.decode("utf-8") if isinstance(cached, bytes) else cached
             return json.loads(value)
 
-        repo = Repository.query.get(repo_id)
+        repo = db.session.get(Repository, repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
@@ -100,7 +101,7 @@ class WorkflowEngine:
         return result
 
     def generate_workflow(self, repo_id: int, workflow_name: str, stack: str, branch: Optional[str] = None) -> dict:
-        repo = Repository.query.get(repo_id)
+        repo = db.session.get(Repository, repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
@@ -116,7 +117,7 @@ class WorkflowEngine:
         return {"yaml": yaml_content, "branch": target_branch}
 
     def commit_workflow(self, repo_id: int, workflow_name: str, stack: str, commit_message: str, branch: Optional[str] = None) -> dict:
-        repo = Repository.query.get(repo_id)
+        repo = db.session.get(Repository, repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
