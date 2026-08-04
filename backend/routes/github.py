@@ -97,6 +97,23 @@ def generate_workflow():
 @github_bp.route("/webhook", methods=["POST"])
 def github_webhook():
     payload = request.get_json() or {}
-    event = request.headers.get("X-GitHub-Event")
-    # Real webhook validation can be added here
+    event = request.headers.get("X-GitHub-Event", "push")
+
+    if event == "push":
+        repo_data = payload.get("repository") or {}
+        full_name = repo_data.get("full_name")  # owner/repo
+        if full_name and "/" in full_name:
+            owner, repo_name = full_name.split("/", 1)
+            from backend.models import Project, UserProfile
+            projects = Project.query.filter_by(repo_owner=owner, repo_name=repo_name).all()
+            for p in projects:
+                profile = UserProfile.query.filter_by(user_id=p.created_by).first()
+                token = profile.github_access_token if profile else None
+                if token:
+                    from backend.services.analyze_service import analyze_repo
+                    import threading
+                    app = current_app._get_current_object()
+                    threading.Thread(target=analyze_repo, args=(app, p.id, token), daemon=True).start()
+                    current_app.logger.info("Webhook triggered re-analysis for project %s (%s)", p.id, full_name)
+
     return jsonify({"event": event, "received": True}), 200

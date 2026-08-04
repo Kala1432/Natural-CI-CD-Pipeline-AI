@@ -11,4 +11,6 @@ frontend/dist
 instance
 graphify-out
 *.db
+SYSTEM_ARCHITECTURE_PROMPT.md
+
 

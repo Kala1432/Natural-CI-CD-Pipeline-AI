@@ -270,10 +270,10 @@ def publish_workflow(project_id):
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    # We need the generated workflow in draft status
-    workflow = GeneratedWorkflow.query.filter_by(project_id=project_id, pr_status="draft").order_by(GeneratedWorkflow.id.desc()).first()
+    # We need the latest generated workflow for this project
+    workflow = GeneratedWorkflow.query.filter_by(project_id=project_id).order_by(GeneratedWorkflow.id.desc()).first()
     if not workflow:
-        return jsonify({"error": "No draft workflow found. Generate one first."}), 400
+        return jsonify({"error": "No generated workflow found. Generate one first."}), 400
 
     data = request.get_json() or {}
     method = data.get("method", "pr")  # 'commit' or 'pr'
@@ -306,9 +306,13 @@ def publish_workflow(project_id):
             author_email=author_email
         )
         if not resp or "error" in resp:
-            err_msg = resp.get("error", "GitHub commit returned an empty response") if resp else "Empty response"
+            err_msg = resp.get("error", "GitHub commit failed") if resp else "Empty response"
+            err_str = str(err_msg).lower()
+            if "push access" in err_str or "permission" in err_str or "resource not accessible" in err_str or "403" in err_str:
+                return jsonify({"error": "You do not have direct write permissions to commit to this repository. Please choose the 'Pull Request' option instead."}), 403
+            
             logger.error("GitHub direct commit failed for project %s: %s", project_id, err_msg)
-            return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 422
+            return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 400
 
         workflow.pr_status = "merged"
         workflow.pr_url = resp.get("html_url")
@@ -319,14 +323,72 @@ def publish_workflow(project_id):
         return jsonify({"success": True, "message": "Workflow committed directly to default branch", "workflow": workflow.to_dict()}), 200
 
     elif method == "pr":
-        # Create a new branch
-        branch_resp = gh.create_branch(owner, repo, branch_name, default_branch)
-        if "error" in branch_resp:
-            return jsonify({"error": f"Failed to create branch: {branch_resp['error']}"}), 422
+        head_ref = branch_name
+        target_repo_owner = owner
 
-        # Commit to that branch
+        # 1. Early Check: If an open PR already exists on GitHub for this branch, return it directly!
+        existing_pr = gh.get_existing_pull_request(owner, repo, branch_name)
+        if existing_pr:
+            workflow.pr_status = "open"
+            workflow.pr_url = existing_pr.get("html_url")
+            workflow.pr_number = existing_pr.get("number")
+            project.status = "pr_created"
+            db.session.commit()
+            return jsonify({
+                "success": True,
+                "message": "A Pull Request is already open on GitHub for this workflow.",
+                "workflow": workflow.to_dict()
+            }), 200
+
+        # 2. Try creating a branch directly on target repository
+        branch_resp = gh.create_branch(owner, repo, branch_name, default_branch)
+        
+        # 3. If direct branch creation fails due to permissions (e.g. friend's repo), fallback to Fork
+        if "error" in branch_resp and not branch_resp.get("already_exists"):
+            err_text = str(branch_resp.get("error", ""))
+            is_perm_issue = (
+                branch_resp.get("status_code") in (403, 404) or
+                "push access" in err_text.lower() or
+                "resource not accessible" in err_text.lower() or
+                "permission" in err_text.lower()
+            )
+            if is_perm_issue:
+                logger.info("Direct branch creation on %s/%s restricted; attempting Fork workflow", owner, repo)
+                gh_user = gh.get_authenticated_user()
+                if not gh_user or not gh_user.get("login"):
+                    return jsonify({"error": "Could not fetch your GitHub user details to fork the repository."}), 403
+                
+                fork_owner = gh_user["login"]
+                fork_resp = gh.fork_repository(owner, repo)
+                if "error" in fork_resp:
+                    return jsonify({"error": f"Could not fork repository: {fork_resp['error']}"}), 400
+
+                target_repo_owner = fork_owner
+                head_ref = f"{fork_owner}:{branch_name}"
+
+                # Check if PR already exists from fork
+                existing_fork_pr = gh.get_existing_pull_request(owner, repo, head_ref)
+                if existing_fork_pr:
+                    workflow.pr_status = "open"
+                    workflow.pr_url = existing_fork_pr.get("html_url")
+                    workflow.pr_number = existing_fork_pr.get("number")
+                    project.status = "pr_created"
+                    db.session.commit()
+                    return jsonify({
+                        "success": True,
+                        "message": "A Pull Request from your fork is already open on GitHub.",
+                        "workflow": workflow.to_dict()
+                    }), 200
+
+                branch_resp = gh.create_branch(fork_owner, repo, branch_name, default_branch)
+                if "error" in branch_resp and not branch_resp.get("already_exists"):
+                    return jsonify({"error": f"Failed to create branch on your fork: {branch_resp['error']}"}), 400
+            else:
+                return jsonify({"error": f"Failed to create branch: {branch_resp['error']}"}), 400
+
+        # 4. Commit workflow file to target branch (either directly or on fork)
         commit_resp = gh.commit_workflow_file(
-            repo_full_name=f"{owner}/{repo}",
+            repo_full_name=f"{target_repo_owner}/{repo}",
             branch=branch_name,
             file_path=workflow.filename,
             commit_message=commit_message,
@@ -337,17 +399,35 @@ def publish_workflow(project_id):
         if not commit_resp or "error" in commit_resp:
             err_msg = commit_resp.get("error", "GitHub commit returned an empty response") if commit_resp else "Empty response"
             logger.error("GitHub PR branch commit failed for project %s: %s", project_id, err_msg)
-            return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 422
+            return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 400
 
-        # Open a PR
+        # 5. Open Pull Request on original repo (cross-repo PR if from fork)
         pr_title = commit_message
         pr_body = (
             "This Pull Request adds an automated CI/CD workflow generated by Pipeline.sh "
             "based on your approved automation steps."
         )
-        pr_resp = gh.create_pull_request(owner, repo, pr_title, branch_name, default_branch, pr_body)
+        pr_resp = gh.create_pull_request(owner, repo, pr_title, head_ref, default_branch, pr_body)
         if "error" in pr_resp:
-            return jsonify({"error": f"Failed to open Pull Request: {pr_resp['error']}"}), 422
+            err_msg = str(pr_resp.get("error"))
+            existing_pr = None
+            if pr_resp.get("status_code") == 422 and "pull request already exists" in err_msg.lower():
+                logger.info("GitHub create PR reported an existing PR for %s/%s head=%s", owner, repo, head_ref)
+                existing_pr = gh.get_existing_pull_request(owner, repo, head_ref)
+                if not existing_pr and ":" in head_ref:
+                    existing_pr = gh.get_existing_pull_request(owner, repo, head_ref.split(":", 1)[1])
+                if not existing_pr:
+                    existing_pr = gh.get_existing_pull_request(owner, repo, branch_name)
+            if not existing_pr:
+                existing_pr = gh.get_existing_pull_request(owner, repo, head_ref) or gh.get_existing_pull_request(owner, repo, branch_name)
+            if existing_pr:
+                workflow.pr_status = "open"
+                workflow.pr_url = existing_pr.get("html_url")
+                workflow.pr_number = existing_pr.get("number")
+                project.status = "pr_created"
+                db.session.commit()
+                return jsonify({"success": True, "message": "Pull request is open on GitHub", "workflow": workflow.to_dict()}), 200
+            return jsonify({"error": f"Failed to open Pull Request: {err_msg}"}), 400
 
         workflow.pr_status = "open"
         workflow.pr_url = pr_resp.get("html_url")

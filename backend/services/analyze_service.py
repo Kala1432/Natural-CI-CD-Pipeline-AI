@@ -106,13 +106,6 @@ def analyze_repo(app, project_id: int, github_token: str):
                     owner, repo, len(filenames), ", truncated" if truncated else "")
         time.sleep(0.5)  # let frontend see analyzed state
 
-        # Empty repo: no recognisable signal files
-        if not (_SIGNAL_FILES & filenames):
-            _set_status(app, project_id, "failed",
-                        "No recognised project files found (package.json, requirements.txt, "
-                        "pom.xml, go.mod, Gemfile, etc.). Add a dependency manifest and re-analyse.")
-            return
-
         stack, file_contents = _detect_stack(gh, owner, repo, branch, filenames)
 
         if truncated:
@@ -301,6 +294,28 @@ def _detect_stack(gh, owner: str, repo: str, branch: str, filenames: set) -> tup
                 stack["test_framework"] = "rspec"
                 stack["has_tests"] = True
 
+    # ── Fallback: HTML / Static Web / Docker / General ─────────────────────────
+    if not stack["language"]:
+        html_files = [f for f in filenames if f.endswith(".html") or f.endswith(".htm")]
+        if html_files or "index.html" in filenames:
+            stack["language"] = "html"
+            stack["framework"] = "static-web"
+        elif stack["has_dockerfile"]:
+            stack["language"] = "docker"
+            stack["framework"] = "container"
+        else:
+            py_files = [f for f in filenames if f.endswith(".py")]
+            js_files = [f for f in filenames if f.endswith(".js") or f.endswith(".ts")]
+            if py_files:
+                stack["language"] = "python"
+                stack["framework"] = "script"
+            elif js_files:
+                stack["language"] = "javascript"
+                stack["framework"] = "static-js"
+            else:
+                stack["language"] = "general"
+                stack["framework"] = "code"
+
     # ── Lint config detection ─────────────────────────────────────────────────
     lint_files = {
         ".eslintrc", ".eslintrc.js", ".eslintrc.json", ".eslintrc.yml",
@@ -323,7 +338,7 @@ def _generate_steps(stack: dict, file_contents: dict, filenames: set, owner: str
     steps = []
     lang = stack.get("language") or "unknown"
     framework = stack.get("framework")
-    pm = stack.get("package_manager") or "pip"
+    pm = stack.get("package_manager") or "npm"
     tf = stack.get("test_framework")
     has_tests = stack.get("has_tests", False)
     has_dockerfile = stack.get("has_dockerfile", False)
@@ -331,6 +346,44 @@ def _generate_steps(stack: dict, file_contents: dict, filenames: set, owner: str
     lint_config = stack.get("lint_config")
     node_ver = stack.get("node_version")
     py_ver = stack.get("python_version")
+
+    # ── HTML / Static Web steps ─────────────────────────────────────────────
+    if lang == "html" or framework == "static-web":
+        steps.append({
+            "step_key": "lint",
+            "title": "Validate HTML & Web Assets",
+            "description": (
+                f"Detected HTML and static web assets in {owner}/{repo}. "
+                f"Linting HTML files on every push ensures valid web structure and catches broken tags."
+            ),
+            "recommended": True,
+            "yaml_snippet_preview": "- name: Validate HTML\n  run: npx htmlhint **/*.html || true",
+        })
+        steps.append({
+            "step_key": "build",
+            "title": "Verify Web Build Integrity",
+            "description": (
+                f"Verify that static web assets exist and are ready for deployment."
+            ),
+            "recommended": True,
+            "yaml_snippet_preview": "- name: Verify HTML Files\n  run: test -f index.html && echo 'index.html verified'",
+        })
+        if has_dockerfile:
+            steps.append({
+                "step_key": "docker_build",
+                "title": "Build Container Image",
+                "description": f"Dockerfile found in {owner}/{repo}. Building container image for deployment.",
+                "recommended": True,
+                "yaml_snippet_preview": f"- run: docker build -t {repo.lower()} .",
+            })
+        steps.append({
+            "step_key": "deploy",
+            "title": "Deploy Static Site",
+            "description": f"Deploy web assets to GitHub Pages or cloud hosting on main branch push.",
+            "recommended": False,
+            "yaml_snippet_preview": "- name: Deploy\n  run: echo 'Deploy static web assets'",
+        })
+        return steps
 
     # ── Lint step ────────────────────────────────────────────────────────────
     if lint_config:

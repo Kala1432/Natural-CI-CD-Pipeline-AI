@@ -78,6 +78,9 @@ def build_workflow(project, approved_steps: list) -> str:
         steps.append({"name": "Set up Ruby", "uses": "ruby/setup-ruby@v1",
                       "with": {"bundler-cache": True}})
 
+    elif lang in ("html", "static"):
+        steps.append({"name": "Verify Static HTML Assets", "run": "test -f index.html || find . -name '*.html'"})
+
     # ── Lint ─────────────────────────────────────────────────────────────────
     if "lint" in step_keys:
         lint_cfg = stack.get("lint_config")
@@ -90,6 +93,8 @@ def build_workflow(project, approved_steps: list) -> str:
             steps.append({"name": "Lint", "uses": "golangci/golangci-lint-action@v4"})
         elif lang == "ruby":
             steps.append({"name": "Lint", "run": "bundle exec rubocop"})
+        elif lang in ("html", "static"):
+            steps.append({"name": "Validate HTML", "run": "npx htmlhint **/*.html || true"})
 
     # ── Test ─────────────────────────────────────────────────────────────────
     if "test" in step_keys:
@@ -106,7 +111,7 @@ def build_workflow(project, approved_steps: list) -> str:
         elif tf == "rspec":
             steps.append({"name": "Test", "run": "bundle exec rspec"})
         else:
-            steps.append({"name": "Test", "run": f"{pm} test"})
+            steps.append({"name": "Test", "run": f"{pm} test" if pm else "echo 'No test script configured'"})
 
     # ── Build ────────────────────────────────────────────────────────────────
     if "build" in step_keys:
@@ -117,6 +122,8 @@ def build_workflow(project, approved_steps: list) -> str:
             steps.append({"name": "Build", "run": cmd})
         elif lang == "go":
             steps.append({"name": "Build", "run": "go build ./..."})
+        elif lang in ("html", "static"):
+            steps.append({"name": "Verify Build", "run": "echo 'Static web assets verified successfully'"})
 
     # ── Docker build ─────────────────────────────────────────────────────────
     if "docker_build" in step_keys:

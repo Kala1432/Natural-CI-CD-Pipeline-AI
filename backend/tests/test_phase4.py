@@ -122,8 +122,8 @@ class TestAnalyzeServiceEdgeCases:
             _db.session.delete(p)
             _db.session.commit()
 
-    def test_no_signal_files_sets_failed(self, app):
-        """analyze_repo should fail when tree has files but none are signal files."""
+    def test_non_manifest_repo_analyzes_successfully(self, app):
+        """analyze_repo should successfully analyze repos even without package manifests (e.g. HTML/docs/scripts)."""
         from backend.services.analyze_service import analyze_repo
 
         uid = _ensure_analyze_user(app)
@@ -143,9 +143,8 @@ class TestAnalyzeServiceEdgeCases:
             analyze_repo(app, pid, "token")
 
         with app.app_context():
-            p = Project.query.get(pid)
-            assert p.status == "failed"
-            assert "recognised" in p.error_message.lower()
+            p = _db.session.get(Project, pid)
+            assert p.status == "awaiting_approval"
             _db.session.delete(p)
             _db.session.commit()
 

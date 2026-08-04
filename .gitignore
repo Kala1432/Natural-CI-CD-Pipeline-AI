@@ -11,3 +11,4 @@ build/
 .DS_Store
 .env
 *.sqlite
+SYSTEM_ARCHITECTURE_PROMPT.md

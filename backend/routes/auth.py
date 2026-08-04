@@ -57,8 +57,8 @@ def _get_user(user_id_str) -> User | None:
 
 
 def _github_oauth_config():
-    client_id = current_app.config.get("GITHUB_CLIENT_ID", "").strip()
-    client_secret = current_app.config.get("GITHUB_CLIENT_SECRET", "").strip()
+    client_id = (current_app.config.get("GITHUB_CLIENT_ID") or os.environ.get("GITHUB_CLIENT_ID", "")).strip()
+    client_secret = (current_app.config.get("GITHUB_CLIENT_SECRET") or os.environ.get("GITHUB_CLIENT_SECRET", "")).strip()
     if not client_id or not client_secret:
         return None
     return client_id, client_secret

@@ -73,7 +73,7 @@ const PrConfirmPage = () => {
           <h1 className="text-2xl font-bold text-white">Workflow Published!</h1>
           <p className="mt-2 text-sm text-slate-400">
             {isPr
-              ? `A Pull Request has been opened in your repository under branch "${branchName}".`
+              ? `A Pull Request has been opened for ${project?.repo_owner}/${project?.repo_name} under branch "${branchName}".`
               : `The workflow has been committed directly to branch "${project?.default_branch || "main"}".`}
           </p>
         </div>

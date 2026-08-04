@@ -332,3 +332,41 @@ class TestPublishWorkflowEndpoint:
             p = Project.query.get(pid)
             assert p.status == "pr_created"
 
+    @patch("backend.services.github_service.GitHubService.get_existing_pull_request")
+    @patch("backend.services.github_service.GitHubService.create_branch")
+    @patch("backend.services.github_service.GitHubService.commit_workflow_file")
+    @patch("backend.services.github_service.GitHubService.create_pull_request")
+    def test_publish_pr_existing_pr_returns_success(self, mock_pr, mock_commit, mock_branch, mock_existing_pr, client, auth_headers, app):
+        mock_branch.return_value = {"ref": "refs/heads/hifi-ci-setup"}
+        mock_commit.return_value = {"html_url": "https://github.com/test/repo/commit/123"}
+        mock_pr.return_value = {"error": "A pull request already exists for Saurabhh45:hifi-ci-setup.", "status_code": 422}
+        mock_existing_pr.side_effect = [None, {"html_url": "https://github.com/test/repo/pull/2", "number": 2}]
+
+        pid, sids = _make_project(app, "phase5@test.com", stack={
+            "language": "python", "framework": "flask", "package_manager": "pip",
+            "has_tests": True, "test_framework": "pytest", "has_dockerfile": False,
+            "has_ci": False, "lint_config": None, "node_version": None, "python_version": "3.11",
+        })
+
+        client.patch(f"/api/projects/{pid}/steps",
+                     json=[{"id": sids[0], "approved": True}],
+                     headers=auth_headers)
+        client.post(f"/api/projects/{pid}/generate", headers=auth_headers)
+
+        res = client.post(f"/api/projects/{pid}/publish", json={
+            "method": "pr",
+            "commit_message": "Add ci workflow",
+            "branch_name": "hifi-ci-setup"
+        }, headers=auth_headers)
+
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["workflow"]["pr_status"] == "open"
+        assert data["workflow"]["pr_number"] == 2
+        assert "open on github" in data["message"].lower()
+
+        with app.app_context():
+            p = Project.query.get(pid)
+            assert p.status == "pr_created"
+
