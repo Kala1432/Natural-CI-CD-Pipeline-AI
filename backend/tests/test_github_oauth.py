@@ -4,26 +4,27 @@ from unittest.mock import Mock, patch
 import pytest
 
 from backend.app import create_app
-from backend.db import db
-from backend.models import User, UserProfile
+from backend.models_mongo import User, UserProfile
 
 
 @pytest.fixture()
 def app():
     application = create_app({
         "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
-        "JWT_SECRET_KEY": "test-jwt-secret",
-        "SECRET_KEY": "test-app-secret",
+        "JWT_SECRET_KEY": "test-jwt-secret-at-least-32-bytes",
+        "SECRET_KEY": "test-app-secret-at-least-32-bytes",
         "GITHUB_CLIENT_ID": "github-client-id",
         "GITHUB_CLIENT_SECRET": "github-client-secret",
         "BACKEND_URL": "http://localhost:5000",
         "FRONTEND_URL": "http://localhost:3000",
+        "MONGODB_URI": "mongomock://localhost",
     })
     with application.app_context():
-        db.create_all()
+        # Clean MongoDB collections before each test
+        db = User._get_collection().database
+        for collection in db.list_collection_names():
+            db.drop_collection(collection)
         yield application
-        db.drop_all()
 
 
 @pytest.fixture()
@@ -38,7 +39,7 @@ def auth_headers(client):
         "email": "oauth@example.com",
         "password": "password123",
     })
-    return {"Authorization": f"Bearer {response.get_json()['access_token']}"}
+    return {}
 
 
 def _state_from_login_url(client, headers):
@@ -92,9 +93,11 @@ def test_callback_connects_current_user_without_jwt_in_url(
     assert "token=" not in response.location
 
     with app.app_context():
-        user = User.query.filter_by(email="oauth@example.com").one()
-        profile = UserProfile.query.filter_by(user_id=user.id).one()
+        user = User.objects(email="oauth@example.com").first()
+        assert user is not None
         assert user.github_id == "12345"
-        assert profile.github_connected is True
-        assert profile.github_login == "octocat"
-        assert profile.github_access_token == "github-user-token"
+        # UserProfile is embedded in User — read from user.profile
+        assert user.profile is not None
+        assert user.profile.github_connected is True
+        assert user.profile.github_login == "octocat"
+        assert user.profile.github_access_token == "github-user-token"

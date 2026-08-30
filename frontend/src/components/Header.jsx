@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useAuth } from "../hooks/AuthContext"
+import Logo from "./Logo"
 
 const Avatar = ({ user }) => {
   const initials = user?.name
@@ -36,9 +37,9 @@ const Header = () => {
 
   return (
     <header className="flex h-14 flex-shrink-0 items-center justify-between border-b border-subtle bg-[#0a0f1e]/80 px-6 backdrop-blur-xl">
-      {/* Left: page context (empty for now, pages can portal content here) */}
-      <div className="flex items-center gap-2 text-sm text-slate-400">
-        <span className="text-white font-medium">HiFi</span>
+      {/* Left: page context */}
+      <div className="flex items-center gap-3 text-sm text-slate-400">
+        <Logo size={28} showText />
         <span className="text-slate-600">/</span>
         <span>CI/CD Pipeline Generator</span>
       </div>

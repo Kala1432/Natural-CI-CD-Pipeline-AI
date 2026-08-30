@@ -1,47 +1,97 @@
 import json
 import logging
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from backend.celery_app import celery_app
+from flask import current_app, has_app_context
+
+from backend.repositories import ProjectRepository, AutomationStepRepository
+from backend.models_mongo import Project, DetectedStack
+
+def _get_app():
+    if has_app_context():
+        return current_app._get_current_object()
+    from backend.app import create_app
+    return create_app()
 
 logger = logging.getLogger(__name__)
 
 
-def _set_status(app, project_id: int, status: str, error: str = None):
+def _set_status(project_id: str, status: str, error: str = None):
     """Update project status inside an app context."""
+    app = _get_app()
     with app.app_context():
-        from backend.db import db
-        from backend.models import Project
-        p = db.session.get(Project, project_id)
-        if p:
-            p.status = status
-            if error is not None:
-                p.error_message = error
-            db.session.commit()
+        project_repo = ProjectRepository()
+        project_repo.update_status(project_id, status, error_message=error or "")
 
 
-def _save_stack_and_steps(app, project_id: int, stack: dict, steps: list):
+def _fetch_files_parallel(gh, owner, repo, branch, paths: list) -> dict:
+    """
+    Fetch multiple files from GitHub in parallel using a thread pool.
+    Returns {path: content} for any files that were fetched successfully.
+    """
+    results = {}
+    if not paths:
+        return results
+    with ThreadPoolExecutor(max_workers=min(4, len(paths))) as ex:
+        future_to_path = {
+            ex.submit(gh.get_file_content, owner, repo, p, branch): p
+            for p in paths
+        }
+        for fut in as_completed(future_to_path, timeout=15):
+            path = future_to_path[fut]
+            try:
+                content = fut.result()
+                if content:
+                    results[path] = content
+            except Exception as exc:
+                logger.warning("[analyze] failed to fetch %s: %s", path, exc)
+    return results
+
+
+def _save_stack_and_steps(project_id: str, stack: dict, steps: list):
     """Persist detected_stack and AutomationStep records."""
+    app = _get_app()
     with app.app_context():
-        from backend.db import db
-        from backend.models import AutomationStep, Project
-        p = db.session.get(Project, project_id)
-        if not p:
-            return
-        p.detected_stack = stack
-        p.status = "analyzed"
+        project_repo = ProjectRepository()
+        step_repo = AutomationStepRepository()
+
+        # Build DetachedStack for MongoEngine
+        detected_stack = DetectedStack(
+            language=stack.get("language", ""),
+            framework=stack.get("framework", ""),
+            package_manager=stack.get("package_manager", ""),
+            has_dockerfile=stack.get("has_dockerfile", False),
+            has_tests=stack.get("has_tests", False),
+        )
+
+        project_repo.update_status(
+            project_id,
+            "analyzed",
+            detected_stack=detected_stack.to_dict() if hasattr(detected_stack, 'to_dict') else {
+                "language": stack.get("language", ""),
+                "framework": stack.get("framework", ""),
+                "package_manager": stack.get("package_manager", ""),
+                "has_dockerfile": stack.get("has_dockerfile", False),
+                "has_tests": stack.get("has_tests", False),
+            },
+            readiness_score=stack.get("readiness_score", 0),
+        )
+
         # Remove any previous steps (re-analysis)
-        AutomationStep.query.filter_by(project_id=project_id).delete()
+        from backend.models_mongo import AutomationStep
+        AutomationStep.objects(project_id=project_id).delete()
+
         for s in steps:
-            db.session.add(AutomationStep(
+            step_repo.create(
                 project_id=project_id,
                 step_key=s["step_key"],
                 title=s["title"],
                 description=s["description"],
                 recommended=s["recommended"],
-                approved=False,
-                yaml_snippet_preview=s.get("yaml_snippet_preview"),
-            ))
-        p.status = "awaiting_approval"
-        db.session.commit()
+                yaml_snippet_preview=s.get("yaml_snippet_preview", ""),
+            )
+
+        project_repo.update_status(project_id, "awaiting_approval")
 
 
 # Signal files that indicate a recognisable tech stack
@@ -51,19 +101,26 @@ _SIGNAL_FILES = {
 }
 
 
-def analyze_repo(app, project_id: int, github_token: str):
+@celery_app.task(bind=True, soft_time_limit=120, time_limit=180)
+def analyze_repo(self, project_id: str, github_token: str):
     """
     Background function: fetch repo tree, detect stack from real files,
     generate AutomationStep records with per-repo reasoning.
     Updates Project.status at each stage so the frontend can poll progress.
-    """
-    from backend.services.github_service import GitHubService
 
+    Time limits (seconds):
+      soft_time_limit=120: raises SoftTimeLimitExceeded after 2 min
+      time_limit=180: hard kill after 3 min
+    """
+    import time as _time
+    from backend.services.github_service import GitHubService
     try:
+        t_start = _time.monotonic()
+        app = _get_app()
         with app.app_context():
-            from backend.db import db
-            from backend.models import Project
-            project = db.session.get(Project, project_id)
+            from backend.repositories import ProjectRepository
+            project_repo = ProjectRepository()
+            project = project_repo.get_by_id(project_id)
             if not project:
                 return
             owner = project.repo_owner
@@ -73,20 +130,20 @@ def analyze_repo(app, project_id: int, github_token: str):
         gh = GitHubService(github_token)
 
         # ── Stage 1: Reading repo tree ──────────────────────────────────────
-        _set_status(app, project_id, "pending_analysis")
+        _set_status(project_id, "pending_analysis")
         logger.info("[analyze] %s/%s — fetching tree", owner, repo)
-        time.sleep(0.5)  # let frontend see pending_analysis state
 
+        t0 = _time.monotonic()
         tree_data = gh.get_repo_tree(owner, repo, branch)
+        logger.info("[analyze] tree fetched in %.2fs", _time.monotonic() - t0)
         if tree_data is None:
             # None means a network/auth error from _get()
-            _set_status(app, project_id, "failed",
+            _set_status(project_id, "failed",
                         "Could not fetch repository tree. Check token permissions.")
             return
 
-        # Rate-limit check: GitHub returns {message: "API rate limit exceeded..."}
         if isinstance(tree_data, dict) and "message" in tree_data and "rate limit" in tree_data["message"].lower():
-            _set_status(app, project_id, "failed",
+            _set_status(project_id, "failed",
                         "GitHub API rate limit exceeded. Please wait a few minutes and try again.")
             return
 
@@ -94,37 +151,38 @@ def analyze_repo(app, project_id: int, github_token: str):
         truncated = tree_data.get("truncated", False)
 
         if not tree_items:
-            _set_status(app, project_id, "failed",
+            _set_status(project_id, "failed",
                         "Repository appears to be empty — no files found.")
             return
 
         filenames = {item["path"] for item in tree_items if item.get("type") == "blob"}
 
         # ── Stage 2: Detecting tech stack ───────────────────────────────────
-        _set_status(app, project_id, "analyzed")
+        _set_status(project_id, "analyzed")
         logger.info("[analyze] %s/%s — detecting stack (%d files%s)",
                     owner, repo, len(filenames), ", truncated" if truncated else "")
-        time.sleep(0.5)  # let frontend see analyzed state
 
+        t1 = _time.monotonic()
         stack, file_contents = _detect_stack(gh, owner, repo, branch, filenames)
+        stack["readiness_score"] = _calculate_readiness_score(stack)
+        logger.info("[analyze] stack detected in %.2fs", _time.monotonic() - t1)
 
         if truncated:
             # Surface truncation as a warning in the first step description later
             stack["_truncated"] = True
 
         # ── Stage 3: Generating step suggestions ────────────────────────────
-        logger.info("[analyze] %s/%s — generating steps, stack=%s", owner, repo, stack)
-        time.sleep(0.3)
-
+        t2 = _time.monotonic()
         steps = _generate_steps(stack, file_contents, filenames, owner, repo)
+        logger.info("[analyze] steps generated in %.2fs (%d steps)", _time.monotonic() - t2, len(steps))
 
         # ── Persist ─────────────────────────────────────────────────────────
-        _save_stack_and_steps(app, project_id, stack, steps)
-        logger.info("[analyze] %s/%s — done, %d steps generated", owner, repo, len(steps))
+        _save_stack_and_steps(project_id, stack, steps)
+        logger.info("[analyze] %s/%s — done, %.2fs total", owner, repo, _time.monotonic() - t_start)
 
     except Exception as exc:
         logger.exception("[analyze] project_id=%s failed: %s", project_id, exc)
-        _set_status(app, project_id, "failed", str(exc))
+        _set_status(project_id, "failed", str(exc))
 
 
 # ── Stack detection ──────────────────────────────────────────────────────────
@@ -155,15 +213,32 @@ def _detect_stack(gh, owner: str, repo: str, branch: str, filenames: set) -> tup
     if ci_files:
         stack["has_ci"] = True
 
-    # ── Dockerfile ───────────────────────────────────────────────────────────
+    # ── Dockerfile & Compose ──────────────────────────────────────────────────
     if "Dockerfile" in filenames or "dockerfile" in filenames:
         stack["has_dockerfile"] = True
 
+    if "docker-compose.yml" in filenames or "docker-compose.yaml" in filenames:
+        stack["has_docker_compose"] = True
+
+    # ── Determine which files need fetching (parallel I/O) ────────────────────
+    files_to_fetch = []
+    if "package.json" in filenames:
+        files_to_fetch.append("package.json")
+    if "pyproject.toml" in filenames:
+        files_to_fetch.append("pyproject.toml")
+    if "requirements.txt" in filenames:
+        files_to_fetch.append("requirements.txt")
+    if "Gemfile" in filenames:
+        files_to_fetch.append("Gemfile")
+
+    # Fetch all relevant files in parallel — saves 2-4 seconds vs sequential calls
+    fetched = _fetch_files_parallel(gh, owner, repo, branch, files_to_fetch)
+    contents.update(fetched)
+
     # ── Node / JavaScript / TypeScript ───────────────────────────────────────
     if "package.json" in filenames:
-        raw = gh.get_file_content(owner, repo, "package.json", branch)
+        raw = fetched.get("package.json")
         if raw:
-            contents["package.json"] = raw
             try:
                 pkg = json.loads(raw)
             except Exception:
@@ -221,35 +296,31 @@ def _detect_stack(gh, owner: str, repo: str, branch: str, filenames: set) -> tup
         stack["language"] = "python"
         stack["package_manager"] = "pip"
 
-        if "pyproject.toml" in filenames:
-            raw = gh.get_file_content(owner, repo, "pyproject.toml", branch)
-            if raw:
-                contents["pyproject.toml"] = raw
-                if "poetry" in raw:
-                    stack["package_manager"] = "poetry"
-                if "pytest" in raw:
-                    stack["test_framework"] = "pytest"
-                    stack["has_tests"] = True
-                # Python version
-                import re
-                m = re.search(r'python_requires\s*=\s*["\']([^"\']+)["\']', raw)
-                if m:
-                    stack["python_version"] = m.group(1)
+        pyproject_raw = fetched.get("pyproject.toml")
+        if pyproject_raw:
+            if "poetry" in pyproject_raw:
+                stack["package_manager"] = "poetry"
+            if "pytest" in pyproject_raw:
+                stack["test_framework"] = "pytest"
+                stack["has_tests"] = True
+            # Python version
+            import re
+            m = re.search(r'python_requires\s*=\s*["\']([^"\']+)["\']', pyproject_raw)
+            if m:
+                stack["python_version"] = m.group(1)
 
-        if "requirements.txt" in filenames:
-            raw = gh.get_file_content(owner, repo, "requirements.txt", branch)
-            if raw:
-                contents["requirements.txt"] = raw
-                lower = raw.lower()
-                if "django" in lower:
-                    stack["framework"] = "django"
-                elif "flask" in lower:
-                    stack["framework"] = "flask"
-                elif "fastapi" in lower:
-                    stack["framework"] = "fastapi"
-                if "pytest" in lower:
-                    stack["test_framework"] = "pytest"
-                    stack["has_tests"] = True
+        requirements_raw = fetched.get("requirements.txt")
+        if requirements_raw:
+            lower = requirements_raw.lower()
+            if "django" in lower:
+                stack["framework"] = "django"
+            elif "flask" in lower:
+                stack["framework"] = "flask"
+            elif "fastapi" in lower:
+                stack["framework"] = "fastapi"
+            if "pytest" in lower:
+                stack["test_framework"] = "pytest"
+                stack["has_tests"] = True
 
         # Check for test directories
         if any(f.startswith("tests/") or f.startswith("test/") for f in filenames):
@@ -285,9 +356,8 @@ def _detect_stack(gh, owner: str, repo: str, branch: str, filenames: set) -> tup
     elif "Gemfile" in filenames:
         stack["language"] = "ruby"
         stack["package_manager"] = "bundler"
-        raw = gh.get_file_content(owner, repo, "Gemfile", branch)
+        raw = fetched.get("Gemfile")
         if raw:
-            contents["Gemfile"] = raw
             if "rails" in raw.lower():
                 stack["framework"] = "rails"
             if "rspec" in raw.lower():
@@ -327,6 +397,24 @@ def _detect_stack(gh, owner: str, repo: str, branch: str, filenames: set) -> tup
         stack["lint_config"] = next(iter(found_lint))
 
     return stack, contents
+
+
+def _calculate_readiness_score(stack: dict) -> int:
+    """Calculate a 0-100 Deployment Readiness Score based on detected stack."""
+    score = 0
+    if stack.get("has_dockerfile"):
+        score += 25
+    if stack.get("has_tests"):
+        score += 25
+    if stack.get("has_ci"):
+        score += 20
+    if stack.get("lint_config"):
+        score += 10
+    if stack.get("package_manager"):
+        score += 10
+    if stack.get("has_docker_compose"):
+        score += 10
+    return min(100, score)
 
 
 # ── Step generation ──────────────────────────────────────────────────────────

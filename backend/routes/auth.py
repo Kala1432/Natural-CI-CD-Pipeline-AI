@@ -7,14 +7,23 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 import requests
-from flask import Blueprint, current_app, jsonify, redirect, request, url_for
-from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required
+from flask import Blueprint, current_app, jsonify, redirect, request, url_for, make_response
+from flask_jwt_extended import (
+    create_access_token, get_jwt_identity, jwt_required,
+    set_access_cookies, unset_jwt_cookies
+)
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
-from werkzeug.security import check_password_hash, generate_password_hash
+from passlib.hash import argon2
 
-from backend.db import db
-from backend.models import EmailOTP, GithubConnection, User, UserProfile
+from backend.repositories import (
+    UserRepository,
+    EmailOTPRepository,
+    GithubConnectionRepository,
+    AuditLogRepository,
+)
+from backend.repositories import to_str
 from backend.services.email_service import email_is_configured, send_otp_email
+from backend.services.audit_service import log_audit_event
 
 auth_bp = Blueprint("auth", __name__)
 logger = logging.getLogger(__name__)
@@ -23,36 +32,33 @@ GITHUB_OAUTH_STATE_MAX_AGE = 10 * 60
 OTP_PURPOSES = ("verify_email", "reset_password")
 
 
-def _user_payload(user: User) -> dict:
-    profile = user.profile
+def _user_payload(user_dict: dict) -> dict:
+    """Convert a user dict from repository to API payload."""
+    profile = user_dict.get("profile", {})
     return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "avatar_url": user.avatar_url,
-        "role": user.role,
-        "github_connected": profile.github_connected if profile else False,
-        "github_login": profile.github_login if profile else None,
-        "notification_email": profile.notification_email if profile else user.email,
+        "id": user_dict["id"],
+        "email": user_dict["email"],
+        "name": user_dict.get("name", ""),
+        "avatar_url": user_dict.get("avatar_url", ""),
+        "role": user_dict.get("role", "developer"),
+        "github_connected": profile.get("github_connected", False),
+        "github_login": profile.get("github_login"),
+        "notification_email": profile.get("notification_email") or user_dict["email"],
     }
 
 
-def _ensure_profile(user: User) -> UserProfile:
-    if not user.profile:
-        profile = UserProfile(
-            user_id=user.id,
-            github_connected=False,
-            notification_email=user.email,
-        )
-        db.session.add(profile)
-        db.session.commit()
-    return user.profile
+def _get_user_repository():
+    return UserRepository()
 
 
-def _get_user(user_id_str) -> User | None:
+def _get_user(user_id_str):
+    """Get user dict by ID string using repository."""
+    if not user_id_str:
+        return None
     try:
-        return db.session.get(User, int(user_id_str))
-    except (TypeError, ValueError):
+        user_repo = _get_user_repository()
+        return user_repo.get_by_id_str(user_id_str)
+    except Exception:
         return None
 
 
@@ -83,19 +89,20 @@ def _otp_hash(user_id, purpose, code):
     return hmac.new(secret, payload, hashlib.sha256).hexdigest()
 
 
-def _send_user_otp(user, purpose, enforce_cooldown=False):
+def _send_user_otp(user_id, purpose, enforce_cooldown=False):
+    """Send OTP using repository pattern. Returns (code, retry_after_seconds)."""
     if purpose not in OTP_PURPOSES:
         raise ValueError("Invalid OTP purpose")
 
     now = datetime.utcnow()
-    latest = EmailOTP.query.filter_by(
-        user_id=user.id,
-        purpose=purpose,
-    ).order_by(EmailOTP.created_at.desc()).first()
+    otp_repo = EmailOTPRepository()
+    latest = otp_repo.latest_for(user_id, purpose)
+
     cooldown = current_app.config["OTP_RESEND_COOLDOWN_SECONDS"]
     if (
         enforce_cooldown
         and latest
+        and latest.created_at
         and (now - latest.created_at).total_seconds() < cooldown
     ):
         remaining = cooldown - int((now - latest.created_at).total_seconds())
@@ -106,59 +113,68 @@ def _send_user_otp(user, purpose, enforce_cooldown=False):
             "Email delivery is not configured. The administrator must configure Gmail SMTP."
         )
 
-    EmailOTP.query.filter_by(
-        user_id=user.id,
-        purpose=purpose,
-        consumed_at=None,
-    ).update({"consumed_at": now})
+    # Consume any previous unused OTPs for this purpose
+    for otp in otp_repo.find_by_user(user_id):
+        if otp.purpose == purpose and not otp.consumed_at:
+            otp.consumed_at = now
+            otp.save()
 
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    otp = EmailOTP(
-        user_id=user.id,
+    # Cryptographically secure random 6-digit numeric code (100,000 - 999,999)
+    code = f"{secrets.randbelow(900_000) + 100_000}"
+    user_repo = _get_user_repository()
+    user_dict = user_repo.get_by_id_str(user_id)
+
+    otp_repo.create_otp(
+        user_id=user_id,
         purpose=purpose,
-        code_hash=_otp_hash(user.id, purpose, code),
-        attempts=0,
+        code_hash=_otp_hash(user_id, purpose, code),
         expires_at=now + timedelta(
             minutes=current_app.config["OTP_EXPIRY_MINUTES"]
         ),
     )
-    db.session.add(otp)
-    db.session.commit()
 
-    if not current_app.config.get("MAIL_SUPPRESS_SEND"):
+    if not current_app.config.get("MAIL_SUPPRESS_SEND") and user_dict:
         try:
-            send_otp_email(user.email, code, purpose)
+            send_otp_email(user_dict["email"], code, purpose)
         except Exception:
-            db.session.delete(otp)
-            db.session.commit()
             raise
     return code, None
 
 
-def _consume_user_otp(user, purpose, code):
-    otp = EmailOTP.query.filter_by(
-        user_id=user.id,
-        purpose=purpose,
-        consumed_at=None,
-    ).order_by(EmailOTP.created_at.desc()).first()
-    now = datetime.utcnow()
-    if not otp or otp.expires_at < now:
+def _consume_user_otp(user_id, purpose, code):
+    """Verify OTP using repository pattern. Returns (success, error_message)."""
+    otp_repo = EmailOTPRepository()
+
+    # Find the latest unused OTP for this purpose
+    valid_otp = None
+    for otp in otp_repo.find_by_user(user_id):
+        if otp.purpose == purpose and not otp.consumed_at:
+            valid_otp = otp
+            break
+
+    if not valid_otp:
         return False, "The code is invalid or has expired."
-    if otp.attempts >= current_app.config["OTP_MAX_ATTEMPTS"]:
+
+    now = datetime.utcnow()
+    if valid_otp.expires_at and valid_otp.expires_at < now:
+        return False, "The code is invalid or has expired."
+    if valid_otp.attempts >= current_app.config["OTP_MAX_ATTEMPTS"]:
         return False, "Too many incorrect attempts. Request a new code."
 
     if not hmac.compare_digest(
-        otp.code_hash,
-        _otp_hash(user.id, purpose, str(code).strip()),
+        valid_otp.code_hash or "",
+        _otp_hash(user_id, purpose, str(code).strip()),
     ):
-        otp.attempts += 1
-        db.session.commit()
+        otp_repo.increment_attempts(valid_otp)
         return False, "The code is invalid or has expired."
 
-    otp.consumed_at = now
-    db.session.commit()
+    otp_repo.consume(valid_otp)
     return True, None
 
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
 
 @auth_bp.route("/register", methods=["POST"])
 def register():
@@ -171,7 +187,9 @@ def register():
         return jsonify({"error": "Email and password are required"}), 400
     if len(password) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
-    if User.query.filter_by(email=email).first():
+
+    user_repo = _get_user_repository()
+    if user_repo.find_by_email(email):
         return jsonify({"error": "An account with this email already exists"}), 409
 
     verification_required = current_app.config["EMAIL_VERIFICATION_REQUIRED"]
@@ -182,44 +200,39 @@ def register():
     ):
         verification_required = False
 
-    user = User(
+    user = user_repo.create_user(
         email=email,
-        password_hash=generate_password_hash(password),
+        password_hash=argon2.hash(password),
         name=name or email.split("@")[0],
         role="developer",
         email_verified=not verification_required,
+        is_admin=False,
     )
-    db.session.add(user)
-    db.session.flush()
+    user_id = user.id
 
-    db.session.add(UserProfile(user_id=user.id, github_connected=False, notification_email=email))
-    db.session.commit()
+    log_audit_event(action="user.register", user_id=user_id, details={"email": user.email})
 
     if verification_required:
         try:
-            debug_code, _ = _send_user_otp(user, "verify_email")
+            _send_user_otp(user_id, "verify_email")
         except Exception:
             logger.exception("Registration OTP delivery failed")
             try:
-                db.session.rollback()
-                user_to_del = db.session.get(User, user.id)
-                if user_to_del:
-                    db.session.delete(user_to_del)
-                    db.session.commit()
+                user_repo.delete_by_id(user_id)
             except Exception:
-                db.session.rollback()
+                pass
             return jsonify({"error": "Could not send the verification email. Please try again."}), 502
         response = {
             "message": "Verification code sent.",
             "email": user.email,
             "requires_verification": True,
         }
-        if current_app.config.get("TESTING") and current_app.config.get("MAIL_SUPPRESS_SEND"):
-            response["debug_otp"] = debug_code
         return jsonify(response), 202
 
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": _user_payload(user)}), 201
+    token = create_access_token(identity=str(user_id))
+    resp = jsonify({"user": _user_payload(user.to_dict())})
+    set_access_cookies(resp, token)
+    return resp, 201
 
 
 @auth_bp.route("/verify-email", methods=["POST"])
@@ -227,32 +240,43 @@ def verify_email():
     data = request.get_json() or {}
     email = data.get("email", "").strip().lower()
     code = str(data.get("otp", "")).strip()
-    user = User.query.filter_by(email=email).first()
+
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_email(email)
     if not user or not code:
         return jsonify({"error": "A valid email and verification code are required"}), 400
     if user.email_verified:
         return jsonify({"error": "This email is already verified"}), 409
 
-    valid, error = _consume_user_otp(user, "verify_email", code)
+    user_id = user.id
+    valid, error = _consume_user_otp(user_id, "verify_email", code)
     if not valid:
+        log_audit_event("user.verify_email.failed", user_id=user_id, details={"error": error}, status="failure")
         return jsonify({"error": error}), 400
 
-    user.email_verified = True
-    db.session.commit()
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": _user_payload(user)})
+    # Update email_verified
+    from backend.models_mongo import User
+    User.objects(id=user_id).update(set__email_verified=True)
+    log_audit_event("user.verify_email.success", user_id=user_id)
+
+    user_dict = user_repo.get_by_id_str(user_id)
+    token = create_access_token(identity=str(user_id))
+    resp = jsonify({"user": _user_payload(user_dict)})
+    set_access_cookies(resp, token)
+    return resp
 
 
 @auth_bp.route("/resend-verification", methods=["POST"])
 def resend_verification():
     email = (request.get_json() or {}).get("email", "").strip().lower()
-    user = User.query.filter_by(email=email).first()
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_email(email)
     if not user or user.email_verified:
         return jsonify({"message": "If verification is pending, a code will be sent."})
+
+    user_id = user.id
     try:
-        debug_code, retry_after = _send_user_otp(
-            user, "verify_email", enforce_cooldown=True
-        )
+        _, retry_after = _send_user_otp(user_id, "verify_email", enforce_cooldown=True)
     except Exception:
         logger.exception("Verification OTP resend failed")
         return jsonify({"error": "Could not send the verification email. Please try again."}), 502
@@ -261,25 +285,23 @@ def resend_verification():
             "error": f"Please wait {retry_after} seconds before requesting another code.",
             "retry_after": retry_after,
         }), 429
-    response = {"message": "Verification code sent."}
-    if current_app.config.get("TESTING") and current_app.config.get("MAIL_SUPPRESS_SEND"):
-        response["debug_otp"] = debug_code
-    return jsonify(response)
+    return jsonify({"message": "Verification code sent."})
 
 
 @auth_bp.route("/forgot-password", methods=["POST"])
 def forgot_password():
     email = (request.get_json() or {}).get("email", "").strip().lower()
-    user = User.query.filter_by(email=email).first()
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_email(email)
     response = {
         "message": "If an account exists for that email, a password reset code has been sent."
     }
     if not user or not user.email_verified:
         return jsonify(response)
+
+    user_id = user.id
     try:
-        debug_code, retry_after = _send_user_otp(
-            user, "reset_password", enforce_cooldown=True
-        )
+        _, retry_after = _send_user_otp(user_id, "reset_password", enforce_cooldown=True)
     except Exception:
         logger.exception("Password reset OTP delivery failed")
         return jsonify({"error": "Could not send the password reset email. Please try again."}), 502
@@ -288,8 +310,6 @@ def forgot_password():
             "error": f"Please wait {retry_after} seconds before requesting another code.",
             "retry_after": retry_after,
         }), 429
-    if current_app.config.get("TESTING") and current_app.config.get("MAIL_SUPPRESS_SEND"):
-        response["debug_otp"] = debug_code
     return jsonify(response)
 
 
@@ -301,15 +321,22 @@ def reset_password():
     new_password = data.get("new_password", "")
     if len(new_password) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
-    user = User.query.filter_by(email=email).first()
+
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_email(email)
     if not user or not code:
         return jsonify({"error": "The code is invalid or has expired."}), 400
 
-    valid, error = _consume_user_otp(user, "reset_password", code)
+    user_id = user.id
+    valid, error = _consume_user_otp(user_id, "reset_password", code)
     if not valid:
+        log_audit_event("user.reset_password.failed", user_id=user_id, details={"error": error}, status="failure")
         return jsonify({"error": error}), 400
-    user.password_hash = generate_password_hash(new_password)
-    db.session.commit()
+
+    # Update password hash
+    from backend.models_mongo import User
+    User.objects(id=user_id).update(set__password_hash=argon2.hash(new_password))
+    log_audit_event("user.reset_password.success", user_id=user_id)
     return jsonify({"message": "Password reset successfully. You can now sign in."})
 
 
@@ -319,18 +346,35 @@ def login():
     email = data.get("email", "").strip().lower()
     password = data.get("password", "")
 
-    user = User.query.filter_by(email=email).first()
-    if not user or not user.password_hash or not check_password_hash(user.password_hash, password):
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_email(email)
+    if not user or not user.password_hash:
+        log_audit_event("user.login.failed", details={"email": email}, status="failure")
         return jsonify({"error": "Invalid email or password"}), 401
+
+    try:
+        valid = argon2.verify(password, user.password_hash)
+    except Exception:
+        valid = False
+
+    if not valid:
+        log_audit_event("user.login.failed", user_id=user.id, details={"email": email}, status="failure")
+        return jsonify({"error": "Invalid email or password"}), 401
+
     if current_app.config["EMAIL_VERIFICATION_REQUIRED"] and not user.email_verified:
         return jsonify({
             "error": "Verify your email before signing in.",
             "requires_verification": True,
         }), 403
 
-    _ensure_profile(user)
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": _user_payload(user)})
+    user_id = user.id
+    token = create_access_token(identity=str(user_id))
+    log_audit_event("user.login.success", user_id=user_id)
+
+    user_dict = user_repo.get_by_id_str(user_id)
+    resp = jsonify({"user": _user_payload(user_dict)})
+    set_access_cookies(resp, token)
+    return resp
 
 
 @auth_bp.route("/me", methods=["GET"])
@@ -339,7 +383,6 @@ def me():
     user = _get_user(get_jwt_identity())
     if not user:
         return jsonify({"error": "User not found"}), 404
-    _ensure_profile(user)
     return jsonify({"user": _user_payload(user)})
 
 
@@ -356,42 +399,80 @@ def google_signin():
         timeout=10,
     )
     if not resp.ok:
+        log_audit_event("user.google_signin.failed", details={"reason": "invalid_google_token"}, status="failure")
         return jsonify({"error": "Invalid Google token"}), 401
 
+    import time
     info = resp.json()
     google_id = info.get("sub")
     email = info.get("email", "").lower()
     name = info.get("name", "")
     avatar_url = info.get("picture", "")
 
+    # 1. Validate issuer (iss)
+    iss = info.get("iss", "")
+    if iss not in ("https://accounts.google.com", "accounts.google.com"):
+        log_audit_event("user.google_signin.failed", details={"reason": "invalid_issuer", "iss": iss}, status="failure")
+        return jsonify({"error": "Invalid Google token issuer"}), 401
+
+    # 2. Validate expiration (exp)
+    try:
+        exp = int(info.get("exp", 0))
+        if exp <= int(time.time()):
+            log_audit_event("user.google_signin.failed", details={"reason": "token_expired"}, status="failure")
+            return jsonify({"error": "Google token has expired"}), 401
+    except (ValueError, TypeError):
+        log_audit_event("user.google_signin.failed", details={"reason": "invalid_exp"}, status="failure")
+        return jsonify({"error": "Invalid token expiration claim"}), 401
+
+    # 3. Validate email_verified
+    email_verified = info.get("email_verified")
+    if email_verified not in (True, "true", "True", "1", 1):
+        log_audit_event("user.google_signin.failed", details={"reason": "email_not_verified", "email": email}, status="failure")
+        return jsonify({"error": "Google account email is not verified"}), 401
+
+    # 4. Validate audience if client ID is configured
+    configured_client_id = current_app.config.get("GOOGLE_CLIENT_ID")
+    if configured_client_id and info.get("aud") != configured_client_id:
+        log_audit_event("user.google_signin.failed", details={"reason": "aud_mismatch"}, status="failure")
+        return jsonify({"error": "Invalid Google token audience"}), 401
+
     if not google_id or not email:
+        log_audit_event("user.google_signin.failed", details={"reason": "missing_required_fields"}, status="failure")
         return jsonify({"error": "Google token missing required fields"}), 400
 
-    user = User.query.filter_by(google_id=google_id).first()
+    user_repo = _get_user_repository()
+    user = user_repo.find_by_google_id(google_id)
     if not user:
-        user = User.query.filter_by(email=email).first()
+        user = user_repo.find_by_email(email)
         if user:
-            user.google_id = google_id
-            user.avatar_url = avatar_url or user.avatar_url
+            from backend.models_mongo import User
+            User.objects(id=user.id).update(
+                set__google_id=google_id,
+                set__avatar_url=avatar_url or user.avatar_url
+            )
         else:
-            user = User(
+            user = user_repo.create_user(
                 email=email,
                 google_id=google_id,
                 name=name,
                 avatar_url=avatar_url,
                 role="developer",
                 email_verified=True,
+                is_admin=False,
             )
-            db.session.add(user)
-            db.session.flush()
     else:
-        user.avatar_url = avatar_url or user.avatar_url
+        from backend.models_mongo import User
+        User.objects(id=user.id).update(set__avatar_url=avatar_url or user.avatar_url)
 
-    _ensure_profile(user)
-    db.session.commit()
+    user_id = user.id
+    log_audit_event("user.google_signin.success", user_id=user_id)
 
-    token = create_access_token(identity=str(user.id))
-    return jsonify({"access_token": token, "user": _user_payload(user)})
+    user_dict = user_repo.get_by_id_str(user_id)
+    token = create_access_token(identity=str(user_id))
+    resp = jsonify({"user": _user_payload(user_dict)})
+    set_access_cookies(resp, token)
+    return resp
 
 
 @auth_bp.route("/github/login/url")
@@ -455,9 +536,11 @@ def github_callback():
     except BadSignature:
         return _github_frontend_redirect(error="Invalid GitHub connection state. Please try again.")
 
-    user = _get_user(state_data.get("user_id"))
-    if not user:
+    user_dict = _get_user(state_data.get("user_id"))
+    if not user_dict:
         return _github_frontend_redirect(error="The Pipeline.sh user account no longer exists.")
+
+    user_id = user_dict["id"]
 
     try:
         token_resp = requests.post(
@@ -500,78 +583,114 @@ def github_callback():
     github_id = str(github_id_value)
     github_login_name = gh_user.get("login")
 
+    gh_conn_repo = GithubConnectionRepository()
+    user_repo = _get_user_repository()
+
     # Check if this GitHub account is already connected to any user
-    existing_connection = GithubConnection.query.filter_by(github_id=github_id).first()
-    if existing_connection and existing_connection.user_id != user.id:
-        # GitHub account is connected to another user
+    existing_connection = gh_conn_repo.find_by_user_and_github_id(user_id, github_id)
+    if existing_connection and existing_connection.user_id != user_id:
         return _github_frontend_redirect(
             error="This GitHub account is already connected to another Pipeline.sh user."
         )
 
-    # Check if this user already has this GitHub account connected via user.github_id
-    user_has_connection = User.query.filter(User.github_id == github_id, User.id != user.id).first()
-    if user_has_connection:
+    # Check if this GitHub ID is linked to another user
+    existing_user = user_repo.find_by_github_id(github_id)
+    if existing_user and existing_user.id != user_id:
         return _github_frontend_redirect(
             error="This GitHub account is already connected to another user."
         )
 
-    # Link this GitHub account to the current user
-    # Use new GithubConnection model for multi-account support
-    profile = _ensure_profile(user)
-
-    # Create a new GithubConnection record for this GitHub account
-    github_connection = GithubConnection(
-        user_id=user.id,
+    # Create or update the GitHub connection
+    gh_conn_repo.upsert(
+        user_id=user_id,
         github_id=github_id,
-        access_token=access_token,
         login=github_login_name,
+        access_token=access_token,
     )
-    db.session.add(github_connection)
 
-    # Also update the old user.github_id for backward compatibility
-    user.github_id = github_id
-    user.avatar_url = gh_user.get("avatar_url") or user.avatar_url
-
-    # Update profile for backward compatibility
-    profile.github_connected = True
-    profile.github_access_token = access_token
-    profile.github_login = github_login_name
-
-    db.session.commit()
+    # Update the user's GitHub ID and avatar
+    from backend.models_mongo import User, UserProfile
+    User.objects(id=user_id).update(
+        set__github_id=github_id,
+        set__avatar_url=gh_user.get("avatar_url") or user_dict.get("avatar_url", ""),
+    )
+    User.objects(id=user_id).update(
+        set__profile__github_connected=True,
+        set__profile__github_access_token=access_token,
+        set__profile__github_login=github_login_name,
+    )
 
     return _github_frontend_redirect(connected="1")
+
+
+@auth_bp.route("/logout", methods=["POST"])
+def logout():
+    try:
+        from flask_jwt_extended import verify_jwt_in_request, get_jwt_identity
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+        if identity:
+            log_audit_event("user.logout", user_id=int(identity))
+    except Exception:
+        pass
+    resp = jsonify({"message": "Successfully logged out"})
+    unset_jwt_cookies(resp)
+    return resp
 
 
 @auth_bp.route("/profile", methods=["PATCH"])
 @jwt_required()
 def update_profile():
-    user = _get_user(get_jwt_identity())
-    if not user:
+    user_dict = _get_user(get_jwt_identity())
+    if not user_dict:
         return jsonify({"error": "Not found"}), 404
 
+    user_id = user_dict["id"]
     data = request.get_json() or {}
-    profile = _ensure_profile(user)
+
+    from backend.models_mongo import User, UserProfile
+
+    updates = {}
+    profile_updates = {}
 
     if "notification_email" in data:
-        profile.notification_email = data["notification_email"]
+        profile_updates["notification_email"] = data["notification_email"]
     if "name" in data:
-        user.name = data["name"]
+        updates["name"] = data["name"]
 
-    db.session.commit()
-    return jsonify({"user": _user_payload(user)})
+    if updates:
+        User.objects(id=user_id).update(set__**updates)
+    if profile_updates:
+        # UserProfile is embedded in User; route updates through the parent document
+        profile_set = {f"set__profile__{k}": v for k, v in profile_updates.items()}
+        User.objects(id=user_id).update(**profile_set)
+
+    log_audit_event("user.profile_update", user_id=user_id)
+
+    user_repo = _get_user_repository()
+    updated_user = user_repo.get_by_id_str(user_id)
+    return jsonify({"user": _user_payload(updated_user)})
 
 
 @auth_bp.route("/github/disconnect", methods=["POST"])
 @jwt_required()
 def disconnect_github():
-    user = _get_user(get_jwt_identity())
-    if not user:
+    user_dict = _get_user(get_jwt_identity())
+    if not user_dict:
         return jsonify({"error": "Not found"}), 404
 
-    profile = _ensure_profile(user)
-    profile.github_connected = False
-    profile.github_access_token = None
-    profile.github_login = None
-    user.github_id = None
-    db.session.commit()
-    return jsonify({"message": "GitHub disconnected", "user": _user_payload(user)})
+    user_id = user_dict["id"]
+
+    from backend.models_mongo import User, UserProfile, GithubConnection
+
+    # Clear GitHub connection from user
+    User.objects(id=user_id).update(set__github_id="")
+
+    # Clear profile fields (UserProfile is embedded in User)
+    User.objects(id=user_id).update(
+        set__profile__github_connected=False,
+        set__profile__github_access_token="",
+        set__profile__github_login="",
+    )
+
+    return jsonify({"message": "GitHub disconnected", "user": _user_payload(user_dict)})

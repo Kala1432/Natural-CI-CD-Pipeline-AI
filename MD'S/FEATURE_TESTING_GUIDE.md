@@ -1,0 +1,392 @@
+# FluxForge — Step-by-Step Feature Testing Guide
+
+> A complete walkthrough for verifying every feature in the FluxForge platform. Follow the steps in order, marking each as ✅ when complete.
+
+**Estimated total time:** 45–60 minutes for the full suite.
+
+---
+
+## 0. Prerequisites & Local Startup
+
+Before testing any feature, get the app running:
+
+### 0.1. Environment
+```bash
+# From the project root
+cd c:/Users/Dell/Downloads/Natural-CI-CD-Pipeline-AI
+copy .env.example .env   # Windows
+# or: cp .env.example .env  # macOS/Linux
+```
+
+Fill in **at minimum**:
+- `JWT_SECRET_KEY` (32+ random chars)
+- `SECRET_KEY` (32+ random chars)
+- `OPENAI_API_KEY` (or your `OPENROUTER_API_KEY`)
+- `GITHUB_CLIENT_ID` + `GITHUB_CLIENT_SECRET`
+- `SMTP_USERNAME` + `SMTP_APP_PASSWORD` (Gmail App Password)
+
+### 0.2. Backend
+```bash
+# Terminal 1
+set PYTHONPATH=.                    # Windows
+flask --app backend.app db upgrade
+flask --app backend.app run --port=5001
+```
+
+### 0.3. Celery worker
+```bash
+# Terminal 2
+set PYTHONPATH=.
+celery -A backend.celery_app.celery_app worker --loglevel=info
+```
+
+### 0.4. Frontend
+```bash
+# Terminal 3
+cd frontend
+npm install
+npm run dev
+```
+
+Open **http://localhost:5173** and confirm:
+- ✅ Page title says "FluxForge"
+- ✅ Favicon (gradient F logo) is visible in the browser tab
+- ✅ Landing page shows the FluxForge logo + tagline
+- ✅ No console errors in DevTools (F12)
+
+---
+
+## 1. Branding & Visual Identity
+
+| # | Step | Expected | ✅ |
+|---|------|----------|----|
+| 1.1 | Open `http://localhost:5173` | See FluxForge logo + "AI-powered CI/CD" tagline | ☐ |
+| 1.2 | Check the browser tab | Favicon is the gradient F mark | ☐ |
+| 1.3 | Log in and visit `/projects` | Header shows logo + "CI/CD Pipeline Generator" | ☐ |
+| 1.4 | Open `http://localhost:5173/favicon.svg` directly | Standalone gradient F mark | ☐ |
+| 1.5 | Resize the browser window | Logo scales crisply (it's SVG, no blur) | ☐ |
+
+---
+
+## 2. Authentication & Onboarding
+
+### 2.1. Registration
+1. Go to `/register`
+2. Enter name, email, password (min 6 chars)
+3. Click **Sign up**
+- ✅ Success message: "Account created. Check your email to verify."
+- ✅ OTP email arrives (see step 2.2)
+
+### 2.2. Email Verification
+1. Open your Gmail inbox
+- ✅ The email has a **gradient header with the FluxForge logo**
+- ✅ Subject: "Verify your FluxForge email"
+- ✅ Six large monospaced digit boxes for the OTP
+- ✅ Expiry note: "expires in 10 minutes"
+- ✅ Plain-text fallback also present (view raw email)
+2. Enter the 6-digit code at `/verify-email`
+- ✅ Auto-redirects to `/projects` on success
+
+### 2.3. Forgot Password
+1. Go to `/login` → click **Forgot password**
+2. Enter your email → click **Send reset code**
+- ✅ "If an account exists, you'll receive a reset code" message
+- ✅ Email arrives with subject "Reset your FluxForge password"
+- ✅ Same branded template (gradient header + logo)
+3. Enter the 6-digit code + new password → **Reset password**
+- ✅ Redirects to `/login` with success message
+4. Log in with the new password
+- ✅ Authentication succeeds
+
+### 2.4. Google OAuth
+1. On `/login`, click **Continue with Google**
+- ✅ Google account chooser opens
+2. Pick a Gmail account
+- ✅ Account is created (or linked) and you're logged in
+- ✅ `is_email_verified = true` automatically
+
+### 2.5. GitHub OAuth
+1. On `/login`, click **Continue with GitHub**
+- ✅ GitHub OAuth screen appears
+2. Authorize the app
+- ✅ `profile.github_connected = true`
+- ✅ Token stored (verify in DB: `users.profile.github_access_token` is non-empty)
+- ✅ After redirect, you can create projects
+
+---
+
+## 3. Project Lifecycle
+
+### 3.1. Create a Project
+1. Navigate to `/projects/new`
+2. Paste a real GitHub repo URL: `https://github.com/octocat/Hello-World`
+3. Click **Analyze repository**
+- ✅ Status transitions: `pending_analysis` → `analyzing` → `awaiting_approval`
+- ✅ Spinner/loader during analysis (~10-30s)
+- ✅ Redirected to project detail page
+
+### 3.2. View Detected Stack
+On the project detail page:
+- ✅ Detected stack shows: language, framework, package manager, has_dockerfile, has_tests
+- ✅ **Readiness score** is shown (0–100, weighted by stack maturity)
+- ✅ Recommended automation steps appear with descriptions
+
+### 3.3. Approve / Reject Steps
+1. Click **Approve** on each recommended step
+- ✅ Step is marked approved (checkbox or badge changes)
+2. Reject at least one step
+- ✅ YAML preview updates to exclude rejected steps
+
+### 3.4. Generate Workflow
+1. Click **Generate workflow** at the bottom
+- ✅ Status moves to `workflow_generated`
+- ✅ YAML preview is displayed
+- ✅ "Download YAML" button works (downloads a `.yml` file)
+
+### 3.5. Publish to GitHub
+1. Click **Publish to GitHub**
+- ✅ Choose: commit to default branch OR open pull request
+2. If PR: select base branch, click **Open PR**
+- ✅ Returns a PR URL — open it in a new tab
+- ✅ GitHub shows the new `.github/workflows/ci.yml` file
+- ✅ PR title is "Add CI/CD workflow generated by FluxForge"
+
+---
+
+## 4. Simulations (Chaos Engineering)
+
+### 4.1. Start a Simulation
+1. On a project detail page, click **Run simulation**
+- ✅ Error type selector: `syntax_error`, `missing_import`, `failing_test`
+2. Pick `syntax_error` → click **Start**
+- ✅ Returns `Simulation started` and a sim ID
+- ✅ Status begins as `running`
+
+### 4.2. Monitor Simulation Progress
+1. The status badge updates as the simulation runs:
+- `running` → `failed_as_expected` → `ai_fixed`
+- ✅ Each transition happens within ~2 minutes
+- ✅ The CI pipeline on the `pipeline-sh-simulation-*` branch actually fails first
+- ✅ After AI fix, the same branch passes
+2. View the captured **CI logs** (last 10k chars) on the simulation page
+- ✅ Logs are real, not mocked
+
+### 4.3. AI Diagnosis
+1. After the simulation completes, expand **AI Diagnosis**
+- ✅ Contains debug advice (not the generic placeholder)
+- ✅ Suggested fix mentions the file and the bug
+
+### 4.4. Simulation History
+1. Click **Simulation history**
+- ✅ List of past runs with timestamps, error types, and final status
+
+---
+
+## 5. Analytics Dashboard
+
+Visit `/analytics`:
+
+### 5.1. Header cards
+- ✅ **Pipeline Success Rate** — computed from your projects' readiness scores
+  - If you have ≥1 analyzed project, shows real percentage
+  - If negative trend detected, a "Trending ↓" amber badge appears
+- ✅ **Active Repositories** — count of projects with `status = analyzed | awaiting_approval | workflow_generated`
+- ✅ **AI Failure Risk Score** — blended score (40% ML predictor + 60% from login audit logs)
+  - Color-coded: green < 30, amber < 60, rose ≥ 60
+
+### 5.2. Trend Chart
+- ✅ X-axis = last 14 days
+- ✅ Two lines: green (successes) + red (failures)
+- ✅ If you have audit log data, the chart uses it
+- ✅ If you have no audit data but have projects, fallback history is generated from readiness scores
+- ✅ With no data at all: empty-state message "No pipeline data yet"
+
+### 5.3. AI Recommendations
+- ✅ At least one recommendation appears (e.g. "Enable tests in 3 project(s)…")
+- ✅ Recommendations update as you add/remove projects (refresh the page)
+
+### 5.4. Verify the backend is real
+```bash
+curl -H "Authorization: Bearer <your_jwt>" http://localhost:5001/api/analytics/dashboard
+```
+- ✅ Response includes: `active_repos`, `total_projects`, `success_rate`, `failure_risk_score`, `recommendations`, `pipeline_history`
+- ✅ No hardcoded `12` for active_repos, no hardcoded `86.1` for success_rate
+
+---
+
+## 6. Deployment Monitor
+
+### 6.1. Trigger a Deployment
+1. On a project with generated workflow, click **Deploy**
+2. Choose environment: `staging` (default) or `production`
+3. Click **Start deployment**
+- ✅ Returns `task_id` (Celery task)
+- ✅ Status moves to `pending` → `running` → `success` / `failed`
+
+### 6.2. Live Logs
+1. On `/deployments/<id>`, open the **Logs** tab
+- ✅ Logs stream in near real-time (every 2-3s)
+- ✅ Each log line shows timestamp + step name + status
+
+### 6.3. EC2 Mode (optional — requires AWS_DEPLOYMENT_MODE=real)
+- ✅ Spins up an EC2 instance via boto3
+- ✅ Shows the AWS instance ID on the deployment page
+- ✅ SSH or HTTP health-check verifies success
+
+### 6.4. Rollback / Anomaly Detection
+- ✅ If anomaly detected, deployment is auto-rolled-back
+- ✅ `ErrorReport` is created with severity
+- ✅ Appears in the Admin "Incident Reports" count
+
+---
+
+## 7. Admin Dashboard (requires `is_admin = true`)
+
+### 7.1. Become admin
+```python
+# In a Flask shell
+flask --app backend.app shell
+>>> from backend.models import User
+>>> u = User.query.filter_by(email="your@email.com").first()
+>>> u.is_admin = True
+>>> db.session.commit()
+```
+
+### 7.2. View stats
+Navigate to `/admin`:
+- ✅ 7 stat cards now (was 6): Total Users, Projects, Active Deployments, Total Deployments, Incident Reports, Platform Error Rate, **Failure Risk Score**
+- ✅ Failure Risk Score is color-coded and matches `/api/analytics/dashboard`
+- ✅ ML subsystem description shows real project count + top recommendation
+
+### 7.3. Audit logs
+Visit `/admin/audit-logs`:
+- ✅ Lists recent `user.login.success`, `user.login.failed`, `deployment.triggered`, etc.
+- ✅ Filter by action works
+- ✅ Pagination loads 50 at a time
+
+---
+
+## 8. Security & RBAC (manual probes)
+
+| Test | How to verify | Expected |
+|------|---------------|----------|
+| 8.1 | Log out, then call `GET /api/admin/stats` | `401 Unauthorized` |
+| 8.2 | Log in as a developer, call `GET /api/admin/stats` | `403 Forbidden` |
+| 8.3 | Log in as admin, call `GET /api/admin/stats` | `200 OK` with stats |
+| 8.4 | Try logging in with wrong password 5× | Account temporarily locked / cooldown |
+| 8.5 | Submit registration with weak password | Validation error: min 6 chars |
+| 8.6 | Submit registration with mismatched password | Validation error |
+| 8.7 | Try using an expired OTP | `401 expired` |
+| 8.8 | Try using a consumed OTP | `401 already used` |
+| 8.9 | Submit Google token with bad issuer | `401 issuer invalid` |
+| 8.10 | Inspect JWT cookie | `HttpOnly`, `SameSite=Lax`, `Secure` (in prod) |
+
+---
+
+## 9. Test Suite
+
+### 9.1. Run backend tests
+```bash
+cd c:/Users/Dell/Downloads/Natural-CI-CD-Pipeline-AI
+python -m pytest backend/tests/ -q
+```
+- ✅ All non-pre-existing tests pass (the 4 `test_phase2.py::test_ai_validate_pipeline_*` failures are unrelated to current work — they reference `AIService.validate_pipeline` which was removed in a prior commit)
+
+### 9.2. Run frontend tests
+```bash
+cd frontend
+npm test
+```
+- ✅ All component tests pass
+
+---
+
+## 10. End-to-End Smoke Test (10 minutes)
+
+If you only have 10 minutes, do this minimum:
+
+1. ✅ Visit `/` — see the FluxForge logo
+2. ✅ Register a new account
+3. ✅ Open the verification email — branded HTML template with logo
+4. ✅ Enter the OTP — get verified
+5. ✅ Connect GitHub via OAuth
+6. ✅ Create a project from `https://github.com/octocat/Hello-World`
+7. ✅ Approve at least 2 steps + click Generate
+8. ✅ Open a PR with the generated workflow
+9. ✅ Start a simulation — watch it run end-to-end
+10. ✅ Visit `/analytics` — see real numbers, not "Mon/Tue/Wed"
+11. ✅ Log in as admin (if applicable) — see the failure risk card
+
+---
+
+## 11. Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| OTP email never arrives | Check spam; verify `SMTP_*` env vars; check `MAIL_SUPPRESS_SEND` is not `true` |
+| GitHub OAuth 404 | Ensure callback URL in GitHub App is `http://localhost:5173/api/auth/github/callback` (or your prod URL) |
+| Celery task stuck in `PENDING` | Verify Redis is running and `REDIS_URL` matches |
+| `ImportError: cannot import name 'genai' from 'google'` | The `ai_service.py` was changed to use Google GenAI without installing `google-genai`. Either `pip install google-genai` or `git checkout HEAD -- backend/services/ai_service.py` to restore OpenAI |
+| MongoDB connection refused | Set `MONGODB_URI` to a real Atlas connection string OR set `MONGODB_URI=mongodb://localhost:27017/fluxforge` for local |
+| Frontend shows blank page | Run `npm run dev`; check console for missing env vars (`VITE_API_BASE_URL`) |
+| Login keeps redirecting | JWT cookie missing — check `withCredentials: true` in `frontend/src/api.js` |
+| 51 tests was the old count | `test_phase2.py` has 4 new failures pre-existing in the repo. Total = 55; passing = 51 |
+
+---
+
+## 12. Feature Coverage Matrix
+
+Use this as a quick checklist before releases:
+
+| Feature | Frontend Page | Backend Endpoint | Tested? |
+|---------|---------------|------------------|---------|
+| Rebrand (logo, name) | All pages | n/a | ☐ |
+| Registration | `/register` | `POST /api/auth/register` | ☐ |
+| Email verification (branded) | `/verify-email` | `POST /api/auth/verify-email` | ☐ |
+| Forgot password (branded) | `/forgot-password` | `POST /api/auth/forgot-password` | ☐ |
+| Reset password | `/forgot-password` | `POST /api/auth/reset-password` | ☐ |
+| Google OAuth | `/login` | `POST /api/auth/google` | ☐ |
+| GitHub OAuth | `/login` | `GET /api/auth/github` | ☐ |
+| Project create | `/projects/new` | `POST /api/projects` | ☐ |
+| Stack analysis | Project detail | `POST /api/projects/<id>/analyze` (Celery) | ☐ |
+| Approve steps | Project detail | `PATCH /api/projects/<id>/steps/<step_id>` | ☐ |
+| Generate workflow | Project detail | `POST /api/projects/<id>/workflow` | ☐ |
+| Publish to GitHub | Project detail | `POST /api/projects/<id>/publish` | ☐ |
+| Simulation start | Project detail | `POST /api/projects/<id>/simulate` | ☐ |
+| Simulation list | Project detail | `GET /api/projects/<id>/simulations` | ☐ |
+| Analytics dashboard | `/analytics` | `GET /api/analytics/dashboard` | ☐ |
+| Deploy trigger | Project detail | `POST /api/deploy/projects/<id>` | ☐ |
+| Deploy list | `/deployments` | `GET /api/deploy/all` | ☐ |
+| Admin stats | `/admin` | `GET /api/admin/stats` | ☐ |
+| Admin audit logs | `/admin` | `GET /api/admin/audit-logs` | ☐ |
+| Profile | `/profile` | `GET /api/auth/me` | ☐ |
+| Logout | Header menu | `POST /api/auth/logout` | ☐ |
+
+---
+
+## 13. Sign-off
+
+After completing every step above, sign off:
+
+- [ ] All Section 0 prerequisites met
+- [ ] Section 1 (branding) verified
+- [ ] Section 2 (auth) verified
+- [ ] Section 3 (project lifecycle) verified
+- [ ] Section 4 (simulations) verified
+- [ ] Section 5 (analytics) verified — **no hardcoded mock data**
+- [ ] Section 6 (deployments) verified
+- [ ] Section 7 (admin) verified
+- [ ] Section 8 (security) verified
+- [ ] Section 9 (tests) passing
+- [ ] Section 10 (smoke test) passed
+
+**Tested by:** ___________________ **Date:** ___________________
+
+**Issues found:**
+1. _________________________________________________________________
+2. _________________________________________________________________
+3. _________________________________________________________________
+
+---
+
+> **Note:** This guide assumes a local development setup. For production testing, replace `http://localhost:5173` with your deployment URL and ensure all `*.ai` / SMTP credentials are set in the production environment.

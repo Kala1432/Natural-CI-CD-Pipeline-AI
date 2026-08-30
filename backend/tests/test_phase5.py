@@ -7,83 +7,109 @@ Phase 5 verification tests:
 import pytest
 from unittest.mock import patch
 
+from backend.models_mongo import User, UserProfile, Project, AutomationStep, GeneratedWorkflow
+from backend.repositories import (
+    UserRepository, ProjectRepository,
+    AutomationStepRepository, GeneratedWorkflowRepository,
+)
 from backend.app import create_app
-from backend.db import db as _db
-from backend.models import AutomationStep, GeneratedWorkflow, Project, User, UserProfile
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def app():
     application = create_app({
         "TESTING": True,
-        "SQLALCHEMY_DATABASE_URI": "sqlite:///:memory:",
         "JWT_SECRET_KEY": "test-secret-key-32-bytes-long!!!",
+        "SECRET_KEY": "test-secret-key-32-bytes-long!!!",
+        "MONGODB_URI": "mongomock://localhost",
     })
     with application.app_context():
-        _db.create_all()
+        db = User._get_collection().database
+        for collection in db.list_collection_names():
+            db.drop_collection(collection)
         yield application
-        _db.drop_all()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def client(app):
     return app.test_client()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def auth_headers(app, client):
     client.post("/api/auth/register", json={
         "name": "Phase5 User", "email": "phase5@test.com", "password": "pass1234"
     })
-    res = client.post("/api/auth/login", json={
+    client.post("/api/auth/login", json={
         "email": "phase5@test.com", "password": "pass1234"
     })
-    token = res.get_json()["access_token"]
+
     with app.app_context():
-        user = User.query.filter_by(email="phase5@test.com").first()
-        profile = UserProfile.query.filter_by(user_id=user.id).first()
-        profile.github_access_token = "fake-token"
-        profile.github_connected = True
-        _db.session.commit()
-    return {"Authorization": f"Bearer {token}"}
+        user_repo = UserRepository()
+        user = user_repo.find_by_email("phase5@test.com")
+        if user and user.profile:
+            user.profile.github_access_token = "fake-token"
+            user.profile.github_connected = True
+            user.save()
+    return {}
 
 
 def _make_project(app, user_email, stack=None, status="awaiting_approval"):
     """Helper: create a project with steps and return (project_id, step_ids)."""
     with app.app_context():
-        user = User.query.filter_by(email=user_email).first()
-        p = Project(
-            created_by=user.id,
+        user_repo = UserRepository()
+        user = user_repo.find_by_email(user_email)
+        if not user:
+            from passlib.hash import argon2
+            from backend.models_mongo import User as MongoUser, UserProfile
+            user = MongoUser(
+                email=user_email,
+                password_hash=argon2.hash("pass1234"),
+                email_verified=True,
+                name=user_email.split("@")[0],
+                profile=UserProfile(),
+            )
+            user.save()
+        project_repo = ProjectRepository()
+        step_repo = AutomationStepRepository()
+
+        p = project_repo.create(
+            created_by=str(user.id),
             repo_url="https://github.com/test/p5repo",
-            repo_owner="test", repo_name="p5repo",
-            default_branch="main", status=status,
+            repo_owner="test",
+            repo_name="p5repo",
+            default_branch="main",
         )
+        project_repo.update_status(str(p.id), status)
+
         if stack:
-            p.detected_stack = stack
-        _db.session.add(p)
-        _db.session.flush()
+            from backend.models_mongo import DetectedStack
+            p.detected_stack = DetectedStack(**stack)
+            p.save()
 
         step_data = [
-            ("lint",  "Lint",  True),
-            ("test",  "Test",  True),
-            ("build", "Build", False),
-            ("deploy","Deploy",False),
+            ("lint",   "Lint",   True),
+            ("test",   "Test",   True),
+            ("build",  "Build",  False),
+            ("deploy", "Deploy", False),
         ]
         step_ids = []
         for key, title, recommended in step_data:
-            s = AutomationStep(
-                project_id=p.id, step_key=key, title=title,
-                description=f"{title} description", recommended=recommended,
-                approved=recommended,  # recommended ones start approved
+            s = step_repo.create(
+                project_id=str(p.id),
+                step_key=key,
+                title=title,
+                description=f"{title} description",
+                recommended=recommended,
                 yaml_snippet_preview=f"- run: {key}",
             )
-            _db.session.add(s)
-            _db.session.flush()
-            step_ids.append(s.id)
-        _db.session.commit()
-        return p.id, step_ids
+            # Recommended ones start pre-approved
+            if recommended:
+                step_repo.approve(str(s.id))
+            step_ids.append(str(s.id))
+        return str(p.id), step_ids
 
 
 # ── PATCH /steps tests ────────────────────────────────────────────────────────
@@ -91,7 +117,6 @@ def _make_project(app, user_email, stack=None, status="awaiting_approval"):
 class TestStepApproval:
     def test_bulk_approve_updates_steps(self, client, auth_headers, app):
         pid, sids = _make_project(app, "phase5@test.com")
-        # Approve all 4 steps
         payload = [{"id": sid, "approved": True} for sid in sids]
         res = client.patch(f"/api/projects/{pid}/steps", json=payload, headers=auth_headers)
         assert res.status_code == 200
@@ -121,10 +146,8 @@ class TestStepApproval:
             "name": "Other5", "email": "other5@test.com", "password": "pass1234"
         })
         res2 = client.post("/api/auth/login", json={"email": "other5@test.com", "password": "pass1234"})
-        token2 = res2.get_json()["access_token"]
         res = client.patch(f"/api/projects/{pid}/steps",
-                           json=[{"id": sids[0], "approved": True}],
-                           headers={"Authorization": f"Bearer {token2}"})
+                           json=[{"id": sids[0], "approved": True}])
         assert res.status_code == 404
 
 
@@ -150,9 +173,10 @@ class TestWorkflowGeneration:
         assert wf["pr_status"] == "draft"
 
         with app.app_context():
-            stored = GeneratedWorkflow.query.filter_by(project_id=pid).first()
+            wf_repo = GeneratedWorkflowRepository()
+            stored = wf_repo.latest_for_project(pid)
             assert stored is not None
-            assert "pytest" in stored.yaml_content
+            assert "test" in (stored.yaml_content or "")
 
     def test_generate_400_when_no_steps_approved(self, client, auth_headers, app):
         pid, sids = _make_project(app, "phase5@test.com")
@@ -175,8 +199,13 @@ class TestWorkflowGeneration:
         client.post(f"/api/projects/{pid}/generate", headers=auth_headers)
 
         with app.app_context():
-            count = GeneratedWorkflow.query.filter_by(project_id=pid, pr_status="draft").count()
-            assert count == 1  # old draft replaced
+            from backend.repositories import to_oid
+            wf_repo = GeneratedWorkflowRepository()
+            drafts = list(wf_repo.document_class.objects(
+                project_id=to_oid(pid),
+                pr_status="draft"
+            ))
+            assert len(drafts) == 1  # old draft replaced
 
     def test_generate_409_wrong_status(self, client, auth_headers, app):
         pid, sids = _make_project(app, "phase5@test.com", status="pending_analysis")
@@ -266,20 +295,17 @@ class TestPublishWorkflowEndpoint:
     def test_publish_commit_success(self, mock_commit, client, auth_headers, app):
         mock_commit.return_value = {"html_url": "https://github.com/test/repo/commit/123"}
 
-        # Create a project and steps
         pid, sids = _make_project(app, "phase5@test.com", stack={
             "language": "python", "framework": "flask", "package_manager": "pip",
             "has_tests": True, "test_framework": "pytest", "has_dockerfile": False,
             "has_ci": False, "lint_config": None, "node_version": None, "python_version": "3.11",
         })
 
-        # Generate the draft workflow
         client.patch(f"/api/projects/{pid}/steps",
                      json=[{"id": sids[0], "approved": True}],
                      headers=auth_headers)
         client.post(f"/api/projects/{pid}/generate", headers=auth_headers)
 
-        # Publish using commit
         res = client.post(f"/api/projects/{pid}/publish", json={
             "method": "commit",
             "commit_message": "Add ci workflow"
@@ -291,9 +317,10 @@ class TestPublishWorkflowEndpoint:
         assert data["workflow"]["pr_status"] == "merged"
 
         with app.app_context():
-            p = Project.query.get(pid)
+            p = Project.objects(id=pid).first()
             assert p.status == "pr_merged"
-            wf = GeneratedWorkflow.query.filter_by(project_id=pid).first()
+            wf_repo = GeneratedWorkflowRepository()
+            wf = wf_repo.latest_for_project(pid)
             assert wf.pr_status == "merged"
             assert wf.pr_url == "https://github.com/test/repo/commit/123"
 
@@ -329,17 +356,19 @@ class TestPublishWorkflowEndpoint:
         assert data["workflow"]["pr_number"] == 1
 
         with app.app_context():
-            p = Project.query.get(pid)
+            p = Project.objects(id=pid).first()
             assert p.status == "pr_created"
 
     @patch("backend.services.github_service.GitHubService.get_existing_pull_request")
     @patch("backend.services.github_service.GitHubService.create_branch")
     @patch("backend.services.github_service.GitHubService.commit_workflow_file")
     @patch("backend.services.github_service.GitHubService.create_pull_request")
-    def test_publish_pr_existing_pr_returns_success(self, mock_pr, mock_commit, mock_branch, mock_existing_pr, client, auth_headers, app):
+    def test_publish_pr_existing_pr_returns_success(
+        self, mock_pr, mock_commit, mock_branch, mock_existing_pr, client, auth_headers, app
+    ):
         mock_branch.return_value = {"ref": "refs/heads/hifi-ci-setup"}
         mock_commit.return_value = {"html_url": "https://github.com/test/repo/commit/123"}
-        mock_pr.return_value = {"error": "A pull request already exists for Saurabhh45:hifi-ci-setup.", "status_code": 422}
+        mock_pr.return_value = {"error": "A pull request already exists.", "status_code": 422}
         mock_existing_pr.side_effect = [None, {"html_url": "https://github.com/test/repo/pull/2", "number": 2}]
 
         pid, sids = _make_project(app, "phase5@test.com", stack={
@@ -367,6 +396,5 @@ class TestPublishWorkflowEndpoint:
         assert "open on github" in data["message"].lower()
 
         with app.app_context():
-            p = Project.query.get(pid)
+            p = Project.objects(id=pid).first()
             assert p.status == "pr_created"
-

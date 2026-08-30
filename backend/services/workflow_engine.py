@@ -4,8 +4,7 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from backend.db import db
-from backend.models import Repository, User
+from backend.repositories import RepositoryRepository
 from backend.services.cache_service import CacheService
 from backend.services.github_service import GitHubService
 
@@ -60,12 +59,15 @@ def validate_yaml(yaml_content: str) -> List[str]:
     return errors
 
 
-def _cache_key(repo_id: int) -> str:
+def _cache_key(repo_id) -> str:
     return f"workflow_analysis:{repo_id}"
 
 
 class WorkflowEngine:
-    def __init__(self, current_user: User, github_service: GitHubService, cache_service: Optional[CacheService] = None):
+    def __init__(self, current_user: dict, github_service: GitHubService, cache_service: Optional[CacheService] = None):
+        """
+        current_user is a MongoDB user dict (from UserRepository.to_dict()).
+        """
         self.user = current_user
         self.github = github_service
         self.cache = cache_service or CacheService()
@@ -73,14 +75,15 @@ class WorkflowEngine:
     def get_available_templates(self) -> List[str]:
         return list(GitHubService.get_templates().keys())
 
-    def analyze_repository(self, repo_id: int) -> dict:
+    def analyze_repository(self, repo_id) -> dict:
         cached = self.cache.get(_cache_key(repo_id))
         if cached:
             logger.info("Cache hit for repository analysis repo_id=%s", repo_id)
             value = cached.decode("utf-8") if isinstance(cached, bytes) else cached
             return json.loads(value)
 
-        repo = db.session.get(Repository, repo_id)
+        repo_repo = RepositoryRepository()
+        repo = repo_repo.get_by_id(repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
@@ -90,7 +93,7 @@ class WorkflowEngine:
 
         tech_stack = detect_tech_stack(repo_data)
         result = {
-            "repository_id": repo_id,
+            "repository_id": str(repo.id),
             "repo_name": repo.name,
             "detected": tech_stack,
             "github_url": repo_data.get("html_url"),
@@ -100,8 +103,9 @@ class WorkflowEngine:
         logger.info("Analyzed repository_id=%s – stack=%s", repo_id, tech_stack)
         return result
 
-    def generate_workflow(self, repo_id: int, workflow_name: str, stack: str, branch: Optional[str] = None) -> dict:
-        repo = db.session.get(Repository, repo_id)
+    def generate_workflow(self, repo_id, workflow_name: str, stack: str, branch: Optional[str] = None) -> dict:
+        repo_repo = RepositoryRepository()
+        repo = repo_repo.get_by_id(repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
@@ -116,8 +120,9 @@ class WorkflowEngine:
 
         return {"yaml": yaml_content, "branch": target_branch}
 
-    def commit_workflow(self, repo_id: int, workflow_name: str, stack: str, commit_message: str, branch: Optional[str] = None) -> dict:
-        repo = db.session.get(Repository, repo_id)
+    def commit_workflow(self, repo_id, workflow_name: str, stack: str, commit_message: str, branch: Optional[str] = None) -> dict:
+        repo_repo = RepositoryRepository()
+        repo = repo_repo.get_by_id(repo_id)
         if not repo:
             raise WorkflowEngineError(f"Repository {repo_id} not found")
 
@@ -129,8 +134,8 @@ class WorkflowEngine:
             file_path="pipeline.yml",
             commit_message=commit_message,
             yaml_content=generated["yaml"],
-            author_name=self.user.name if self.user else "Pipeline.sh",
-            author_email=self.user.email if self.user else "pipeline@example.com",
+            author_name=self.user.get("name") if self.user else "Pipeline.sh",
+            author_email=self.user.get("email") if self.user else "pipeline@example.com",
         )
 
         if not response or response.get("error") or not response.get("html_url"):

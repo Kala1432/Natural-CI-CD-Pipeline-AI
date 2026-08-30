@@ -5,12 +5,45 @@ and the project's detected_stack. No external dependencies — pure string/dict 
 import yaml
 
 
+from backend.services.ai_service import AIService
+import logging
+
+logger = logging.getLogger(__name__)
+
 def build_workflow(project, approved_steps: list) -> str:
     """
     Return a GitHub Actions YAML string for the given project and approved steps.
-    `approved_steps` is a list of AutomationStep ORM objects.
+    Attempts AI generation first, falls back to static generation if AI fails.
     """
-    stack = project.detected_stack or {}
+    # Normalize stack to a dict (DetectedStack is a MongoEngine EmbeddedDocument)
+    raw_stack = project.detected_stack or {}
+    if not isinstance(raw_stack, dict):
+        raw_stack = raw_stack.to_dict() if raw_stack and hasattr(raw_stack, "to_dict") else {}
+    stack = raw_stack
+
+    # Try AI generation first
+    try:
+        ai_svc = AIService()
+        if ai_svc.client:
+            logger.info("Attempting AI generation for workflow")
+            steps_dict = [s.to_dict() for s in approved_steps]
+            ai_yaml = ai_svc.generate_pipeline(stack, steps_dict)
+            if ai_yaml:
+                logger.info("Successfully generated AI workflow")
+                return ai_yaml
+    except Exception as exc:
+        logger.error("AI workflow generation failed: %s", exc)
+
+    logger.info("Falling back to static workflow generation")
+    return _build_static_workflow(project, approved_steps)
+
+
+def _build_static_workflow(project, approved_steps: list) -> str:
+    """Fallback logic to assemble YAML statically."""
+    stack = project.detected_stack
+    if not isinstance(stack, dict):
+        # DetectedStack may be a MongoEngine EmbeddedDocument or a dict
+        stack = stack.to_dict() if stack and hasattr(stack, "to_dict") else {}
     lang = stack.get("language") or "python"
     pm = stack.get("package_manager") or "pip"
     node_ver = stack.get("node_version") or "20"

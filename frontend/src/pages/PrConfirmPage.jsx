@@ -217,6 +217,17 @@ const PrConfirmPage = () => {
               className="w-full rounded-lg border border-white/10 bg-white/5 px-3.5 py-2.5 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
             />
           </div>
+
+          {workflow && (
+            <div className="pt-4 mt-4 border-t border-white/5">
+              <label className="mb-2 block text-sm font-medium text-slate-300">
+                Generated Configuration ({workflow.filename})
+              </label>
+              <pre className="text-xs text-left bg-slate-950 p-4 rounded-xl text-indigo-300 overflow-x-auto border border-white/5 max-h-64 whitespace-pre-wrap font-mono">
+                {workflow.yaml_content}
+              </pre>
+            </div>
+          )}
         </div>
 
         {/* Action buttons */}

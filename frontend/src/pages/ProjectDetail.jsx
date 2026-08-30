@@ -24,6 +24,47 @@ const StatusBadge = ({ status }) => {
   )
 }
 
+const ReadinessRing = ({ score }) => {
+  if (score === null || score === undefined) return null;
+  const radius = 24;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (score / 100) * circumference;
+  
+  // Color based on score
+  let color = "text-emerald-400";
+  if (score < 50) color = "text-rose-400";
+  else if (score < 80) color = "text-yellow-400";
+
+  return (
+    <div className="relative inline-flex items-center justify-center">
+      <svg className="h-16 w-16 -rotate-90 transform">
+        <circle
+          className="text-slate-700"
+          strokeWidth="4"
+          stroke="currentColor"
+          fill="transparent"
+          r={radius}
+          cx="32"
+          cy="32"
+        />
+        <circle
+          className={`${color} transition-all duration-1000 ease-out`}
+          strokeWidth="4"
+          strokeDasharray={circumference}
+          strokeDashoffset={strokeDashoffset}
+          strokeLinecap="round"
+          stroke="currentColor"
+          fill="transparent"
+          r={radius}
+          cx="32"
+          cy="32"
+        />
+      </svg>
+      <span className="absolute text-sm font-semibold text-white">{score}</span>
+    </div>
+  )
+}
+
 // ── Analysis progress display ─────────────────────────────────────────────────
 
 const PROGRESS_STEPS = [
@@ -248,7 +289,17 @@ const ProjectDetail = () => {
             {project.repo_url} ↗
           </a>
         </div>
-        <StatusBadge status={project.status} />
+        <div className="flex items-center gap-6">
+          {project.readiness_score !== null && project.status !== "pending_analysis" && (
+            <div className="flex items-center gap-3">
+              <div className="text-right">
+                <p className="text-xs font-medium text-slate-400 uppercase tracking-wide">Readiness</p>
+              </div>
+              <ReadinessRing score={project.readiness_score} />
+            </div>
+          )}
+          <StatusBadge status={project.status} />
+        </div>
       </div>
 
       {/* Analysis in progress */}
@@ -303,6 +354,29 @@ const ProjectDetail = () => {
                 <span className="ml-2 text-sm font-normal text-slate-500">({steps.length})</span>
               </h2>
               <div className="flex gap-2">
+                {project.status === "pr_merged" && (
+                  <>
+                    <button
+                      onClick={async () => {
+                        try {
+                          await api.post(`/deploy/projects/${id}`, { environment: "production" })
+                          navigate("/deployments")
+                        } catch (err) {
+                          alert(err.message)
+                        }
+                      }}
+                      className="inline-flex items-center gap-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 px-4 py-2 text-sm font-semibold text-emerald-400 hover:bg-emerald-500/20 transition-colors"
+                    >
+                      🚀 Deploy to AWS
+                    </button>
+                    <button
+                      onClick={() => navigate(`/projects/${id}/simulations`)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-rose-500/10 border border-rose-500/30 px-4 py-2 text-sm font-semibold text-rose-400 hover:bg-rose-500/20 transition-colors"
+                    >
+                      🔥 Simulate Chaos
+                    </button>
+                  </>
+                )}
                 {workflow && (
                   <button
                     onClick={() => navigate(`/projects/${id}/workflow`)}

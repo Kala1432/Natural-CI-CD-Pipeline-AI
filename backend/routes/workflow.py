@@ -4,8 +4,7 @@ from typing import Optional
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-from backend.db import db
-from backend.models import User
+from backend.repositories import UserRepository
 from backend.services.github_service import GitHubService
 from backend.services.workflow_engine import WorkflowEngine, WorkflowEngineError
 
@@ -21,14 +20,18 @@ def _json_error(message: str, status_code: int = 400, errors: Optional[list] = N
 
 
 def _build_engine() -> WorkflowEngine:
+    """Build a WorkflowEngine instance for the current authenticated user."""
     user_id = get_jwt_identity()
-    user = db.session.get(User, int(user_id)) if user_id and str(user_id).isdigit() else None
+    user_repo = UserRepository()
+    user = user_repo.get_by_id_str(user_id)
     if not user:
         raise LookupError("Authenticated user not found")
 
     token = request.headers.get("X-GitHub-Token")
-    if not token and user.profile:
-        token = user.profile.github_access_token
+    if not token:
+        # Try to get token from user's GitHub connection
+        profile = user.get("profile") or {}
+        token = profile.get("github_access_token")
 
     if not token:
         raise ValueError("X-GitHub-Token header or connected GitHub account is required")

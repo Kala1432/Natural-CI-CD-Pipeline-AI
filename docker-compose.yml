@@ -5,11 +5,12 @@ services:
       - "5001:5000"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/pipeline_sh
+      - MONGODB_URI=mongodb://mongodb:27017/pipeline_sh
       - REDIS_URL=redis://redis:6379/0
       - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
       - SECRET_KEY=hifi_flask_secret_change_in_prod
       - AWS_REGION=us-east-1
-      - FRONTEND_URL=http://localhost:3000
+      - FRONTEND_URL=http://localhost:3001
       - BACKEND_URL=http://localhost:5001
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
@@ -24,9 +25,45 @@ services:
       - OTP_RESEND_COOLDOWN_SECONDS=${OTP_RESEND_COOLDOWN_SECONDS:-60}
       - OTP_MAX_ATTEMPTS=${OTP_MAX_ATTEMPTS:-5}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-}
+      - AWS_EC2_INSTANCE_ID=${AWS_EC2_INSTANCE_ID:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:
       db:
         condition: service_healthy
+      mongodb:
+        condition: service_started
+      redis:
+        condition: service_started
+
+  # Celery worker — runs the heavy `analyze_repo`, `run_simulation`, etc. tasks
+  # in the background so the Flask request returns immediately.
+  celery_worker:
+    build: .
+    command: celery -A backend.celery_app.celery_app worker --loglevel=INFO --pool=solo --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/pipeline_sh
+      - MONGODB_URI=mongodb://mongodb:27017/pipeline_sh
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
+      - SECRET_KEY=hifi_flask_secret_change_in_prod
+      - AWS_REGION=us-east-1
+      - FRONTEND_URL=http://localhost:3001
+      - BACKEND_URL=http://localhost:5001
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
+      - AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+      mongodb:
+        condition: service_started
       redis:
         condition: service_started
 
@@ -34,7 +71,7 @@ services:
     build:
       context: ./frontend
     ports:
-      - "3000:4173"
+      - "3001:4173"
     environment:
       - VITE_PROXY_TARGET=http://backend:5000
     depends_on:
@@ -56,8 +93,12 @@ services:
 
   redis:
     image: redis:7
-    ports:
-      - "6379:6379"
+
+  mongodb:
+    image: mongo:6
+    volumes:
+      - mongodb_data:/data/db
 
 volumes:
   db_data:
+  mongodb_data:

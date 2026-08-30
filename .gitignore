@@ -12,3 +12,19 @@ build/
 .env
 *.sqlite
 SYSTEM_ARCHITECTURE_PROMPT.md
+
+# Terraform
+infrastructure/.terraform/
+infrastructure/.terraform.lock.hcl
+infrastructure/terraform.tfvars
+infrastructure/terraform.tfstate
+infrastructure/terraform.tfstate.backup
+infrastructure/*.tfplan
+infrastructure/crash.log
+
+# Build artifacts
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

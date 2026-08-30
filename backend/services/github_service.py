@@ -111,6 +111,47 @@ class GitHubService:
             logger.error("commit_workflow_file failed on %s@%s: %s (status %s)", repo_full_name, branch, err_msg, resp.status_code)
             return {"error": err_msg, "status_code": resp.status_code}
 
+    def commit_file(self, repo_full_name: str, branch: str, file_path: str, commit_message: str, file_content: str, author_name: str = None, author_email: str = None):
+        """Wrapper around commit_workflow_file for general file modification."""
+        return self.commit_workflow_file(repo_full_name, branch, file_path, commit_message, file_content, author_name, author_email)
+
+    def get_workflow_runs(self, owner: str, repo: str, branch: str) -> dict | None:
+        """Fetch recent workflow runs for a specific branch."""
+        url = f"{self.BASE}/repos/{owner}/{repo}/actions/runs"
+        resp = self._get(url, params={"branch": branch, "per_page": 5})
+        if not resp or not resp.ok:
+            return None
+        return resp.json()
+
+    def get_workflow_run_logs(self, owner: str, repo: str, run_id: int) -> str | None:
+        """Download and return the logs for a specific workflow run.
+        GitHub Actions returns a zip file of logs, but we just need a snippet for AI if possible, 
+        or we can fetch the jobs and then the job logs.
+        Wait, fetching the raw text log of a job is easier than the whole run zip.
+        """
+        jobs_url = f"{self.BASE}/repos/{owner}/{repo}/actions/runs/{run_id}/jobs"
+        jobs_resp = self._get(jobs_url)
+        if not jobs_resp or not jobs_resp.ok:
+            return None
+            
+        jobs_data = jobs_resp.json()
+        jobs = jobs_data.get("jobs", [])
+        
+        all_logs = []
+        for job in jobs:
+            job_id = job.get("id")
+            log_url = f"{self.BASE}/repos/{owner}/{repo}/actions/jobs/{job_id}/logs"
+            # Getting job logs requires following a redirect (which requests does automatically)
+            # but we need to accept text/plain
+            try:
+                log_resp = requests.get(log_url, headers={"Authorization": f"Bearer {self.token}"}, timeout=15)
+                if log_resp.ok:
+                    all_logs.append(f"--- LOGS FOR JOB: {job.get('name')} ---\n" + log_resp.text[-5000:])
+            except Exception as e:
+                logger.error("Failed to fetch log for job %s: %s", job_id, e)
+                
+        return "\n".join(all_logs) if all_logs else None
+
     @staticmethod
     def get_templates():
         return {

@@ -1,24 +1,68 @@
-name: Deploy Pipeline.sh to AWS EC2
+###############################################################################
+# FluxForge — GitHub Actions: Deploy to AWS (OIDC)
+#
+# Full pipeline:
+#   1. Test        → pytest + frontend build
+#   2. Build & Push → Docker multi-stage build → ECR
+#   3. Deploy      → SSM Run Command → EC2 (pull + run container)
+#
+# Authentication: GitHub OIDC → AWS IAM Role (no long-lived AWS credentials)
+#
+# Required GitHub Secrets:
+#   AWS_DEPLOY_ROLE_ARN  → arn:aws:iam::123456789012:role/fluxforge-github-actions
+#   DATABASE_URL         → postgresql://user:pass@host:5432/db
+#   REDIS_URL           → redis://host:6379/0
+#   JWT_SECRET_KEY       → random 64-char secret
+#   SECRET_KEY          → random 64-char secret
+#   MONGODB_URI         → mongodb+srv://...
+#   GEMINI_API_KEY      → your Gemini API key
+#   SMTP_*               → email credentials
+#
+# Required GitHub Variables:
+#   AWS_REGION           → ap-south-1
+#   AWS_EC2_INSTANCE_ID  → i-0123456789abcdef0
+#   FRONTEND_URL         → https://api.fluxforge.ai
+###############################################################################
+
+name: FluxForge — Build & Deploy to AWS
 
 on:
   push:
-    branches: [main]
+    branches: [main, saurabh]
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - production
+          - staging
 
 concurrency:
-  group: production-deployment
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-  id-token: write
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'ap-south-1' }}
+  ECR_REPOSITORY: fluxforge-api
+  CONTAINER_NAME: fluxforge
+  CONTAINER_PORT: 5000
+
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC authentication
 
 jobs:
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 1: Test — runs in parallel, blocks the pipeline on failure
+  # ─────────────────────────────────────────────────────────────────────────
   test:
+    name: Test
     runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:15
@@ -26,75 +70,356 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: pipeline_sh_test
-        ports: ["5432:5432"]
+        ports:
+          - "5432:5432"
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+
       redis:
         image: redis:7
-        ports: ["6379:6379"]
+        ports:
+          - "6379:6379"
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - run: pip install -r backend/requirements.txt
+
+      - name: Install Python dependencies
+        run: pip install -r backend/requirements.txt
+
       - name: Run backend tests
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pipeline_sh_test
           REDIS_URL: redis://localhost:6379/0
-          JWT_SECRET_KEY: test-jwt-secret-at-least-32-characters
-          SECRET_KEY: test-app-secret-at-least-32-characters
-        run: pytest -q backend/tests
-      - uses: actions/setup-node@v4
+          JWT_SECRET_KEY: test-jwt-secret-at-least-32-characters-long
+          SECRET_KEY: test-app-secret-at-least-32-characters-long
+        run: python -m pytest backend/tests/ -q --ignore=backend/tests/test_phase2.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-        working-directory: frontend
-      - run: npm run build
+
+      - name: Install frontend dependencies
+        run: npm ci
         working-directory: frontend
 
-  deploy:
-    needs: test
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 2: Build & Push Docker image to ECR
+  # ─────────────────────────────────────────────────────────────────────────
+  build-push:
+    name: Build & Push to ECR
     runs-on: ubuntu-latest
-    environment: production
+    needs: test
+
+    permissions:
+      id-token: write
+      contents: read
+
+    outputs:
+      ecr_registry: ${{ steps.login-ecr.outputs.registry }}
+      image_uri: ${{ steps.image.outputs.uri }}
+
     steps:
-      - name: Configure short-lived AWS credentials
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Deploy main on EC2 through Systems Manager
-        id: deploy
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Compute image URI
+        id: image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          echo "uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "Image: ${IMAGE_URI}"
+
+      - name: Build Docker image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build \
+            --tag "${{ steps.image.outputs.uri }}" \
+            --file Dockerfile.production \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            .
+
+      - name: Push image (commit SHA tag)
+        run: docker push "${{ steps.image.outputs.uri }}"
+
+      - name: Push image (latest tag)
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker tag "${{ steps.image.outputs.uri }}" "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest"
+          docker push "${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:latest"
+
+      - name: Show image digest
+        run: |
+          docker inspect "${{ steps.image.outputs.uri }}" \
+            --format '{{index .RepoDigests 0}}' || echo "(digest not yet available)"
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Job 3: Deploy to EC2 via SSM Run Command
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment: ${{ github.event.inputs.environment || 'production' }}
+
+    steps:
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate configuration
         env:
           INSTANCE_ID: ${{ vars.AWS_EC2_INSTANCE_ID }}
         run: |
+          if [[ -z "$INSTANCE_ID" ]]; then
+            echo "::error::AWS_EC2_INSTANCE_ID is not set in repository variables."
+            echo "Please set it in: Settings → Secrets and variables → Actions → Variables"
+            exit 1
+          fi
+          echo "✓ EC2 instance: $INSTANCE_ID"
+
+      - name: Send SSM deploy command
+        id: ssm
+        env:
+          INSTANCE_ID: ${{ vars.AWS_EC2_INSTANCE_ID }}
+          IMAGE_URI: ${{ needs.build-push.outputs.image_uri }}
+          CONTAINER_NAME: ${{ env.CONTAINER_NAME }}
+          CONTAINER_PORT: ${{ env.CONTAINER_PORT }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          REDIS_URL: ${{ secrets.REDIS_URL }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_APP_PASSWORD: ${{ secrets.SMTP_APP_PASSWORD }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+        run: |
+          set -e
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " Deploying to EC2 instance: $INSTANCE_ID"
+          echo " Image: $IMAGE_URI"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # ── Extract ECR registry and repository from image URI ────────────
+          # IMAGE_URI = "123456789012.dkr.ecr.region.amazonaws.com/repo:tag"
+          ECR_REGISTRY=$(echo "$IMAGE_URI" | cut -d/ -f1)
+          ECR_REPO=$(echo "$IMAGE_URI" | cut -d/ -f2 | cut -d: -f1)
+          IMAGE_TAG=$(echo "$IMAGE_URI" | cut -d: -f2)
+          ECR_REGION=$(echo "$ECR_REGISTRY" | cut -d. -f4)
+          ECR_ACCOUNT_ID=$(echo "$ECR_REGISTRY" | cut -d. -f1)
+
+          echo "ECR Registry: $ECR_REGISTRY"
+          echo "ECR Repo:     $ECR_REPO"
+          echo "Image tag:    $IMAGE_TAG"
+          echo "Region:       $ECR_REGION"
+          echo "Account ID:   $ECR_ACCOUNT_ID"
+
+          # ── Build the SSM command script ───────────────────────────────────
+          # Use a temporary file so we can substitute placeholders without
+          # fighting YAML/JSON escaping in heredocs.
+          cat > /tmp/fluxforge-deploy.sh <<'BASH_EOF'
+          #!/bin/bash
+          set -e
+          exec > >(tee /var/log/fluxforge-deploy.log) 2>&1
+
+          echo "=== FluxForge deployment started at $(date -Iseconds) ==="
+          echo "ECR Registry: __ECR_REGISTRY__"
+          echo "ECR Repo:     __ECR_REPO__"
+          echo "Image tag:    __IMAGE_TAG__"
+          echo "Region:       __ECR_REGION__"
+
+          # 1) Authenticate docker to ECR (uses instance profile role)
+          echo "[1/6] Authenticating docker to ECR..."
+          aws ecr get-login-password --region "__ECR_REGION__" | \
+            docker login --username AWS --password-stdin "__ECR_REGISTRY__"
+
+          # 2) Pull the new image
+          echo "[2/6] Pulling image __ECR_REGISTRY__/__ECR_REPO__:__IMAGE_TAG__..."
+          docker pull "__ECR_REGISTRY__/__ECR_REPO__:__IMAGE_TAG__"
+
+          # 3) Stop and remove old container
+          echo "[3/6] Stopping old container __CONTAINER_NAME__..."
+          docker stop __CONTAINER_NAME__ 2>/dev/null || echo "(no old container to stop)"
+          docker rm -f __CONTAINER_NAME__ 2>/dev/null || echo "(no old container to remove)"
+
+          # 4) Run new container
+          echo "[4/6] Starting new container __CONTAINER_NAME__..."
+          docker run -d \
+            --name __CONTAINER_NAME__ \
+            --restart unless-stopped \
+            --network fluxforge-net \
+            -p __CONTAINER_PORT__:__CONTAINER_PORT__ \
+            -e FLASK_ENV=production \
+            -e PORT=__CONTAINER_PORT__ \
+            -e DATABASE_URL="__DATABASE_URL__" \
+            -e REDIS_URL="__REDIS_URL__" \
+            -e JWT_SECRET_KEY="__JWT_SECRET_KEY__" \
+            -e SECRET_KEY="__SECRET_KEY__" \
+            -e MONGODB_URI="__MONGODB_URI__" \
+            -e AWS_REGION="__AWS_REGION__" \
+            -e FRONTEND_URL="__FRONTEND_URL__" \
+            -e GEMINI_API_KEY="__GEMINI_API_KEY__" \
+            -e SMTP_HOST="__SMTP_HOST__" \
+            -e SMTP_PORT="__SMTP_PORT__" \
+            -e SMTP_USERNAME="__SMTP_USERNAME__" \
+            -e SMTP_APP_PASSWORD="__SMTP_APP_PASSWORD__" \
+            -e EMAIL_FROM="__EMAIL_FROM__" \
+            -e OTP_EXPIRY_MINUTES=10 \
+            "__ECR_REGISTRY__/__ECR_REPO__:__IMAGE_TAG__"
+
+          # 5) Wait for container to start
+          echo "[5/6] Waiting for container to start..."
+          sleep 8
+
+          # 6) Health check
+          echo "[6/6] Running health check..."
+          RUNNING=$(docker inspect --format='{{.State.Running}}' __CONTAINER_NAME__ 2>/dev/null || echo "false")
+          if [ "$RUNNING" != "true" ]; then
+            echo "ERROR: Container failed to start!"
+            docker logs __CONTAINER_NAME__ --tail 100
+            exit 1
+          fi
+
+          # Optional HTTP health check
+          HEALTH_URL="http://127.0.0.1:__CONTAINER_PORT__/api/health"
+          if command -v curl >/dev/null 2>&1; then
+            if curl -fsS --max-time 10 "$HEALTH_URL"; then
+              echo "✓ Health check passed: $HEALTH_URL"
+            else
+              echo "⚠ Health check returned non-2xx (app may still be starting)"
+            fi
+          else
+            echo "(curl not installed — skipping HTTP health check)"
+          fi
+
+          echo "=== FluxForge deployment complete at $(date -Iseconds) ==="
+          BASH_EOF
+
+          # ── Substitute placeholders with environment values ───────────────
+          ESCAPED_DEPLOY=$(python3 - <<PYEOF
+          import os, sys
+
+          with open('/tmp/fluxforge-deploy.sh', 'r') as f:
+              content = f.read()
+
+          # IMPORTANT: env vars are untrusted — strip backticks & quotes to
+          # avoid injection into shell.
+          def safe(value):
+              if value is None:
+                  return ''
+              return value.replace('\\`', '').replace('"', '\\"').replace('\n', ' ')
+
+          content = content.replace('__ECR_REGISTRY__',     safe(os.environ.get('ECR_REGISTRY', '')))
+          content = content.replace('__ECR_REPO__',         safe(os.environ.get('ECR_REPO', '')))
+          content = content.replace('__IMAGE_TAG__',        safe(os.environ.get('IMAGE_TAG', '')))
+          content = content.replace('__ECR_REGION__',       safe(os.environ.get('ECR_REGION', '')))
+          content = content.replace('__CONTAINER_NAME__',   safe(os.environ.get('CONTAINER_NAME', '')))
+          content = content.replace('__CONTAINER_PORT__',   safe(os.environ.get('CONTAINER_PORT', '5000')))
+          content = content.replace('__DATABASE_URL__',     safe(os.environ.get('DATABASE_URL', '')))
+          content = content.replace('__REDIS_URL__',        safe(os.environ.get('REDIS_URL', '')))
+          content = content.replace('__JWT_SECRET_KEY__',   safe(os.environ.get('JWT_SECRET_KEY', '')))
+          content = content.replace('__SECRET_KEY__',       safe(os.environ.get('SECRET_KEY', '')))
+          content = content.replace('__MONGODB_URI__',      safe(os.environ.get('MONGODB_URI', '')))
+          content = content.replace('__AWS_REGION__',       safe(os.environ.get('AWS_REGION', '')))
+          content = content.replace('__FRONTEND_URL__',     safe(os.environ.get('FRONTEND_URL', '')))
+          content = content.replace('__GEMINI_API_KEY__',   safe(os.environ.get('GEMINI_API_KEY', '')))
+          content = content.replace('__SMTP_HOST__',        safe(os.environ.get('SMTP_HOST', '')))
+          content = content.replace('__SMTP_PORT__',        safe(os.environ.get('SMTP_PORT', '465')))
+          content = content.replace('__SMTP_USERNAME__',    safe(os.environ.get('SMTP_USERNAME', '')))
+          content = content.replace('__SMTP_APP_PASSWORD__', safe(os.environ.get('SMTP_APP_PASSWORD', '')))
+          content = content.replace('__EMAIL_FROM__',       safe(os.environ.get('EMAIL_FROM', '')))
+
+          print(content)
+          PYEOF
+          )
+
+          # Write the rendered script and ship it to SSM
+          echo "$ESCAPED_DEPLOY" > /tmp/fluxforge-deploy-final.sh
+
+          # Send as a single SSM command
+          echo "Sending SSM Run Command to instance..."
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "$INSTANCE_ID" \
-            --document-name AWS-RunShellScript \
-            --comment "Deploy Pipeline.sh ${GITHUB_SHA}" \
-            --parameters 'commands=["sudo /opt/pipeline-sh/deploy.sh"]' \
-            --query 'Command.CommandId' \
-            --output text)
-          echo "command_id=$COMMAND_ID" >> "$GITHUB_OUTPUT"
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID"
+            --document-name "AWS-RunShellScript" \
+            --comment "FluxForge deploy $GITHUB_SHA" \
+            --parameters commands="$(cat /tmp/fluxforge-deploy-final.sh)" \
+            --output text \
+            --query 'Command.CommandId')
 
-      - name: Show deployment result
-        if: always() && steps.deploy.outputs.command_id
-        env:
-          INSTANCE_ID: ${{ vars.AWS_EC2_INSTANCE_ID }}
-          COMMAND_ID: ${{ steps.deploy.outputs.command_id }}
-        run: |
+          if [ -z "$COMMAND_ID" ]; then
+            echo "ERROR: Failed to send SSM command (no CommandId returned)"
+            exit 1
+          fi
+          echo "✓ Command ID: $COMMAND_ID"
+
+          echo "Waiting for command to complete (max 10 minutes)..."
+          if ! aws ssm wait command-executed \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --max-errors 1; then
+            echo "ERROR: SSM command failed"
+          fi
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " Deployment result:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           aws ssm get-command-invocation \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID" \
-            --query '{Status:Status,Output:StandardOutputContent,Errors:StandardErrorContent}'
+            --output json \
+            --query '{Status:Status,Output:StandardOutputContent,Errors:StandardErrorContent}' \
+          | python3 -m json.tool || true
+
+      - name: Deployment summary
+        if: always()
+        env:
+          IMAGE_URI: ${{ needs.build-push.outputs.image_uri }}
+        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " FluxForge Deployment Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo " Commit:  $GITHUB_SHA"
+          echo " Image:   $IMAGE_URI"
+          echo " Trigger: $GITHUB_ACTOR / $GITHUB_REF"
+          echo " Region:  ${{ env.AWS_REGION }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

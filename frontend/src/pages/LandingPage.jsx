@@ -1,11 +1,15 @@
 import { Link } from "react-router-dom"
+import Logo from "../components/Logo"
 
 const LandingPage = () => {
   return (
     <div className="container mx-auto py-16 px-6">
       <div className="grid gap-10 lg:grid-cols-2 items-center">
         <div>
-          <p className="text-sm uppercase tracking-[0.3em] text-accent">Pipeline.sh</p>
+          <div className="mb-2">
+            <Logo size={36} showText />
+          </div>
+          <p className="text-sm uppercase tracking-[0.3em] text-indigo-400">AI-powered CI/CD</p>
           <h1 className="mt-6 text-5xl font-semibold text-white">AI-powered CI/CD automation for modern teams</h1>
           <p className="mt-6 text-slate-300 max-w-xl">Connect GitHub repositories, generate workflows automatically, deploy to AWS, analyze logs with AI, and monitor pipelines in real time.</p>
           <div className="mt-8 flex gap-4">

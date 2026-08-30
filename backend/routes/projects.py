@@ -4,20 +4,29 @@ import threading
 from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
-from backend.db import db
-from backend.models import AutomationStep, GeneratedWorkflow, Project, User, UserProfile
+from backend.repositories import (
+    ProjectRepository,
+    AutomationStepRepository,
+    GeneratedWorkflowRepository,
+    UserRepository,
+)
+from backend.models_mongo import User, UserProfile
 
 projects_bp = Blueprint("projects", __name__)
 logger = logging.getLogger(__name__)
 
 
 def _get_github_token(user_id) -> str | None:
+    """Get GitHub access token from a user's MongoDB profile document."""
     try:
-        uid = int(user_id)
+        uid = str(user_id)
     except (TypeError, ValueError):
         return None
-    profile = UserProfile.query.filter_by(user_id=uid).first()
-    return profile.github_access_token if profile else None
+    from backend.models_mongo import User as MongoUser
+    user = MongoUser.objects(id=uid).first()
+    if not user or not user.profile:
+        return None
+    return user.profile.github_access_token or None
 
 
 def _parse_repo_url(url: str):
@@ -40,7 +49,7 @@ def _parse_repo_url(url: str):
 @projects_bp.route("", methods=["POST"])
 @jwt_required()
 def create_project():
-    user_id = int(get_jwt_identity())
+    user_id = get_jwt_identity()
     data = request.get_json() or {}
     repo_url = (data.get("repo_url") or "").strip()
 
@@ -65,35 +74,31 @@ def create_project():
     if not repo_data or repo_data.get("message") == "Not Found" or "id" not in repo_data:
         return jsonify({"error": "Repo not found or you don't have access"}), 404
 
-    existing = Project.query.filter_by(
-        created_by=user_id,
-        repo_owner=owner,
-        repo_name=repo_name,
-    ).first()
+    project_repo = ProjectRepository()
+    # Check by full path
+    all_user_projects = project_repo.find_by_creator(user_id)
+    existing = next(
+        (p for p in all_user_projects
+         if p.repo_owner == owner and p.repo_name == repo_name),
+        None,
+    )
     if existing:
-        return jsonify({"error": "You already have a project for this repository", "project_id": existing.id}), 409
+        return jsonify({
+            "error": "You already have a project for this repository",
+            "project_id": str(existing.id),
+        }), 409
 
-    project = Project(
+    project = project_repo.create(
         created_by=user_id,
         repo_url=repo_url,
         repo_owner=owner,
         repo_name=repo_name,
         default_branch=repo_data.get("default_branch", "main"),
-        status="pending_analysis",
     )
-    db.session.add(project)
-    db.session.commit()
 
-    # Kick off analysis in background thread immediately
+    # Kick off analysis in background via Celery
     from backend.services.analyze_service import analyze_repo
-    from flask import current_app
-    app = current_app._get_current_object()
-    thread = threading.Thread(
-        target=analyze_repo,
-        args=(app, project.id, token),
-        daemon=True,
-    )
-    thread.start()
+    analyze_repo.delay(str(project.id), token)
 
     logger.info("Created project %s for %s/%s, analysis started", project.id, owner, repo_name)
     return jsonify({"project": project.to_dict()}), 201
@@ -102,26 +107,26 @@ def create_project():
 @projects_bp.route("", methods=["GET"])
 @jwt_required()
 def list_projects():
-    user_id = int(get_jwt_identity())
-    projects = (
-        Project.query
-        .filter_by(created_by=user_id)
-        .order_by(Project.created_at.desc())
-        .all()
-    )
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    projects = project_repo.find_by_creator(user_id)
     return jsonify({"projects": [p.to_dict() for p in projects]})
 
 
-@projects_bp.route("/<int:project_id>", methods=["GET"])
+@projects_bp.route("/<project_id>", methods=["GET"])
 @jwt_required()
 def get_project(project_id):
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    steps = AutomationStep.query.filter_by(project_id=project_id).order_by(AutomationStep.id).all()
-    workflow = GeneratedWorkflow.query.filter_by(project_id=project_id).order_by(GeneratedWorkflow.id.desc()).first()
+    step_repo = AutomationStepRepository()
+    wf_repo = GeneratedWorkflowRepository()
+
+    steps = step_repo.find_by_project(project_id)
+    workflow = wf_repo.latest_for_project(project_id)
 
     return jsonify({
         "project": project.to_dict(),
@@ -130,64 +135,65 @@ def get_project(project_id):
     })
 
 
-@projects_bp.route("/<int:project_id>", methods=["DELETE"])
+@projects_bp.route("/<project_id>", methods=["DELETE"])
 @jwt_required()
 def delete_project(project_id):
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
-    db.session.delete(project)
-    db.session.commit()
+    project_repo.delete_by_id(project_id)
     return jsonify({"message": "Project deleted"})
 
 
-@projects_bp.route("/<int:project_id>/status", methods=["GET"])
+@projects_bp.route("/<project_id>/status", methods=["GET"])
 @jwt_required()
 def get_project_status(project_id):
     """Lightweight polling endpoint — returns only status + error_message."""
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
     return jsonify({"status": project.status, "error_message": project.error_message})
 
 
-@projects_bp.route("/<int:project_id>/analyze", methods=["POST"])
+@projects_bp.route("/<project_id>/analyze", methods=["POST"])
 @jwt_required()
 def reanalyze_project(project_id):
     """Trigger a fresh analysis for an existing project."""
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    if project.status in ("pending_analysis", "analyzed"):
+    if project.status == "pending_analysis":
         return jsonify({"error": "Analysis already in progress"}), 409
 
     token = _get_github_token(user_id)
     if not token:
         return jsonify({"error": "GitHub not connected"}), 403
 
-    project.status = "pending_analysis"
-    project.error_message = None
-    db.session.commit()
+    project_repo.update_status(project_id, "pending_analysis", error_message="")
 
     from backend.services.analyze_service import analyze_repo
-    from flask import current_app
-    app = current_app._get_current_object()
-    threading.Thread(target=analyze_repo, args=(app, project.id, token), daemon=True).start()
+    async_result = analyze_repo.delay(project_id, token)
+    task_id = getattr(async_result, "id", None)
 
     logger.info("Re-analysis triggered for project %s", project_id)
-    return jsonify({"message": "Analysis started", "project": project.to_dict()})
+    project = project_repo.get_by_id(project_id)
+    return jsonify({"message": "Analysis started", "project": project.to_dict(), "task_id": task_id}), 202
 
 
-@projects_bp.route("/<int:project_id>/steps", methods=["PATCH"])
+@projects_bp.route("/<project_id>/steps", methods=["PATCH"])
 @jwt_required()
 def update_steps(project_id):
     """Bulk approve/reject steps. Body: [{id, approved}, ...]"""
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
     if project.status not in ("awaiting_approval", "pr_created"):
@@ -197,86 +203,83 @@ def update_steps(project_id):
     if not isinstance(updates, list):
         return jsonify({"error": "Expected a list of {id, approved}"}), 400
 
-    ids = [u["id"] for u in updates if "id" in u]
-    steps = AutomationStep.query.filter(
-        AutomationStep.project_id == project_id,
-        AutomationStep.id.in_(ids),
-    ).all()
-    step_map = {s.id: s for s in steps}
-
+    step_repo = AutomationStepRepository()
+    from backend.models_mongo import AutomationStep
     for u in updates:
-        step = step_map.get(u.get("id"))
-        if step and "approved" in u:
-            step.approved = bool(u["approved"])
+        step_id = u.get("id")
+        if not step_id:
+            continue
+        if "approved" in u:
+            AutomationStep.objects(id=step_id, project_id=project_id).update(
+                set__approved=bool(u["approved"])
+            )
 
-    db.session.commit()
-    all_steps = AutomationStep.query.filter_by(project_id=project_id).order_by(AutomationStep.id).all()
+    all_steps = step_repo.find_by_project(project_id)
     return jsonify({"steps": [s.to_dict() for s in all_steps]})
 
 
-@projects_bp.route("/<int:project_id>/generate", methods=["POST"])
+@projects_bp.route("/<project_id>/generate", methods=["POST"])
 @jwt_required()
 def generate_workflow(project_id):
     """Generate YAML from approved steps and save as GeneratedWorkflow."""
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
     if project.status not in ("awaiting_approval", "pr_created"):
         return jsonify({"error": "Project is not awaiting approval"}), 409
 
-    approved = AutomationStep.query.filter_by(
-        project_id=project_id, approved=True
-    ).order_by(AutomationStep.id).all()
+    step_repo = AutomationStepRepository()
+    wf_repo = GeneratedWorkflowRepository()
+    all_steps = step_repo.find_by_project(project_id)
+    approved = [s for s in all_steps if s.approved]
 
     if not approved:
         return jsonify({"error": "No steps approved. Approve at least one step first."}), 400
 
-    project.status = "generating_yaml"
-    db.session.commit()
+    project_repo.update_status(project_id, "generating_yaml")
 
     try:
         from backend.services.workflow_service import build_workflow
         yaml_content = build_workflow(project, approved)
     except Exception as exc:
         logger.exception("Workflow generation failed for project %s", project_id)
-        project.status = "awaiting_approval"
-        db.session.commit()
+        project_repo.update_status(project_id, "awaiting_approval")
         return jsonify({"error": f"YAML generation failed: {exc}"}), 500
 
     # Delete any previous draft workflow
-    GeneratedWorkflow.query.filter_by(project_id=project_id, pr_status="draft").delete()
+    from backend.models_mongo import GeneratedWorkflow
+    GeneratedWorkflow.objects(project_id=project_id, pr_status="draft").delete()
 
-    workflow = GeneratedWorkflow(
+    workflow = wf_repo.create(
         project_id=project_id,
-        filename=".github/workflows/hifi-ci.yml",
         yaml_content=yaml_content,
-        pr_status="draft",
+        filename=".github/workflows/hifi-ci.yml",
     )
-    db.session.add(workflow)
-    project.status = "awaiting_approval"
-    db.session.commit()
+    project_repo.update_status(project_id, "awaiting_approval")
 
     logger.info("Workflow generated for project %s (%d bytes)", project_id, len(yaml_content))
     return jsonify({"workflow": workflow.to_dict()}), 201
 
 
-@projects_bp.route("/<int:project_id>/publish", methods=["POST"])
+@projects_bp.route("/<project_id>/publish", methods=["POST"])
 @jwt_required()
 def publish_workflow(project_id):
     """Publish generated workflow YAML. Method can be 'commit' or 'pr'."""
-    user_id = int(get_jwt_identity())
-    project = Project.query.filter_by(id=project_id, created_by=user_id).first()
+    user_id = get_jwt_identity()
+    project_repo = ProjectRepository()
+    project = project_repo.find_by_id_for_user(project_id, user_id)
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    # We need the latest generated workflow for this project
-    workflow = GeneratedWorkflow.query.filter_by(project_id=project_id).order_by(GeneratedWorkflow.id.desc()).first()
+    wf_repo = GeneratedWorkflowRepository()
+    workflow = wf_repo.latest_for_project(project_id)
     if not workflow:
         return jsonify({"error": "No generated workflow found. Generate one first."}), 400
 
     data = request.get_json() or {}
-    method = data.get("method", "pr")  # 'commit' or 'pr'
+    method = data.get("method", "pr")
     commit_message = data.get("commit_message") or "Add CI/CD workflow via Pipeline.sh"
     branch_name = data.get("branch_name") or "hifi-ci-setup"
 
@@ -290,12 +293,19 @@ def publish_workflow(project_id):
     owner = project.repo_owner
     repo = project.repo_name
     default_branch = project.default_branch or "main"
-    user = db.session.get(User, user_id)
-    author_name = (user.name if user and user.name else None) or (user.email.split("@")[0] if user and user.email else None) or "Pipeline.sh"
-    author_email = (user.email if user and user.email else None) or "pipeline@example.com"
+
+    user_repo = UserRepository()
+    user_dict = user_repo.get_by_id_str(user_id)
+    if user_dict:
+        author_name = user_dict.get("name") or (
+            user_dict.get("email", "").split("@")[0] if user_dict.get("email") else "Pipeline.sh"
+        )
+        author_email = user_dict.get("email") or "pipeline@example.com"
+    else:
+        author_name = "Pipeline.sh"
+        author_email = "pipeline@example.com"
 
     if method == "commit":
-        # Commit directly to default branch
         resp = gh.commit_workflow_file(
             repo_full_name=f"{owner}/{repo}",
             branch=default_branch,
@@ -308,16 +318,16 @@ def publish_workflow(project_id):
         if not resp or "error" in resp:
             err_msg = resp.get("error", "GitHub commit failed") if resp else "Empty response"
             err_str = str(err_msg).lower()
-            if "push access" in err_str or "permission" in err_str or "resource not accessible" in err_str or "403" in err_str:
+            if ("push access" in err_str or "permission" in err_str
+                    or "resource not accessible" in err_str or "403" in err_str):
                 return jsonify({"error": "You do not have direct write permissions to commit to this repository. Please choose the 'Pull Request' option instead."}), 403
-            
+
             logger.error("GitHub direct commit failed for project %s: %s", project_id, err_msg)
             return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 400
 
-        workflow.pr_status = "merged"
-        workflow.pr_url = resp.get("html_url")
-        project.status = "pr_merged"
-        db.session.commit()
+        wf_repo.update_pr(workflow.id, pr_url=resp.get("html_url", ""), pr_number=0, pr_status="merged")
+        project_repo.update_status(project_id, "pr_merged")
+        workflow.reload()  # refresh to get updated fields
 
         logger.info("Directly committed workflow for project %s to %s/%s@%s", project_id, owner, repo, default_branch)
         return jsonify({"success": True, "message": "Workflow committed directly to default branch", "workflow": workflow.to_dict()}), 200
@@ -326,24 +336,19 @@ def publish_workflow(project_id):
         head_ref = branch_name
         target_repo_owner = owner
 
-        # 1. Early Check: If an open PR already exists on GitHub for this branch, return it directly!
         existing_pr = gh.get_existing_pull_request(owner, repo, branch_name)
         if existing_pr:
-            workflow.pr_status = "open"
-            workflow.pr_url = existing_pr.get("html_url")
-            workflow.pr_number = existing_pr.get("number")
-            project.status = "pr_created"
-            db.session.commit()
+            wf_repo.update_pr(workflow.id, pr_url=existing_pr.get("html_url", ""), pr_number=existing_pr.get("number", 0), pr_status="open")
+            project_repo.update_status(project_id, "pr_created")
+            workflow.reload()
             return jsonify({
                 "success": True,
                 "message": "A Pull Request is already open on GitHub for this workflow.",
-                "workflow": workflow.to_dict()
+                "workflow": workflow.to_dict(),
             }), 200
 
-        # 2. Try creating a branch directly on target repository
         branch_resp = gh.create_branch(owner, repo, branch_name, default_branch)
-        
-        # 3. If direct branch creation fails due to permissions (e.g. friend's repo), fallback to Fork
+
         if "error" in branch_resp and not branch_resp.get("already_exists"):
             err_text = str(branch_resp.get("error", ""))
             is_perm_issue = (
@@ -357,7 +362,7 @@ def publish_workflow(project_id):
                 gh_user = gh.get_authenticated_user()
                 if not gh_user or not gh_user.get("login"):
                     return jsonify({"error": "Could not fetch your GitHub user details to fork the repository."}), 403
-                
+
                 fork_owner = gh_user["login"]
                 fork_resp = gh.fork_repository(owner, repo)
                 if "error" in fork_resp:
@@ -366,18 +371,15 @@ def publish_workflow(project_id):
                 target_repo_owner = fork_owner
                 head_ref = f"{fork_owner}:{branch_name}"
 
-                # Check if PR already exists from fork
                 existing_fork_pr = gh.get_existing_pull_request(owner, repo, head_ref)
                 if existing_fork_pr:
-                    workflow.pr_status = "open"
-                    workflow.pr_url = existing_fork_pr.get("html_url")
-                    workflow.pr_number = existing_fork_pr.get("number")
-                    project.status = "pr_created"
-                    db.session.commit()
+                    wf_repo.update_pr(workflow.id, pr_url=existing_fork_pr.get("html_url", ""), pr_number=existing_fork_pr.get("number", 0), pr_status="open")
+                    project_repo.update_status(project_id, "pr_created")
+                    workflow.reload()
                     return jsonify({
                         "success": True,
                         "message": "A Pull Request from your fork is already open on GitHub.",
-                        "workflow": workflow.to_dict()
+                        "workflow": workflow.to_dict(),
                     }), 200
 
                 branch_resp = gh.create_branch(fork_owner, repo, branch_name, default_branch)
@@ -386,7 +388,6 @@ def publish_workflow(project_id):
             else:
                 return jsonify({"error": f"Failed to create branch: {branch_resp['error']}"}), 400
 
-        # 4. Commit workflow file to target branch (either directly or on fork)
         commit_resp = gh.commit_workflow_file(
             repo_full_name=f"{target_repo_owner}/{repo}",
             branch=branch_name,
@@ -401,7 +402,6 @@ def publish_workflow(project_id):
             logger.error("GitHub PR branch commit failed for project %s: %s", project_id, err_msg)
             return jsonify({"error": f"GitHub commit failed: {err_msg}"}), 400
 
-        # 5. Open Pull Request on original repo (cross-repo PR if from fork)
         pr_title = commit_message
         pr_body = (
             "This Pull Request adds an automated CI/CD workflow generated by Pipeline.sh "
@@ -421,21 +421,17 @@ def publish_workflow(project_id):
             if not existing_pr:
                 existing_pr = gh.get_existing_pull_request(owner, repo, head_ref) or gh.get_existing_pull_request(owner, repo, branch_name)
             if existing_pr:
-                workflow.pr_status = "open"
-                workflow.pr_url = existing_pr.get("html_url")
-                workflow.pr_number = existing_pr.get("number")
-                project.status = "pr_created"
-                db.session.commit()
+                wf_repo.update_pr(workflow.id, pr_url=existing_pr.get("html_url", ""), pr_number=existing_pr.get("number", 0), pr_status="open")
+                project_repo.update_status(project_id, "pr_created")
+                workflow.reload()
                 return jsonify({"success": True, "message": "Pull request is open on GitHub", "workflow": workflow.to_dict()}), 200
             return jsonify({"error": f"Failed to open Pull Request: {err_msg}"}), 400
 
-        workflow.pr_status = "open"
-        workflow.pr_url = pr_resp.get("html_url")
-        workflow.pr_number = pr_resp.get("number")
-        project.status = "pr_created"
-        db.session.commit()
+        wf_repo.update_pr(workflow.id, pr_url=pr_resp.get("html_url", ""), pr_number=pr_resp.get("number", 0), pr_status="open")
+        project_repo.update_status(project_id, "pr_created")
+        workflow.reload()
 
-        logger.info("Created PR for project %s: %s", project_id, workflow.pr_url)
+        logger.info("Created PR for project %s: %s", project_id, pr_resp.get("html_url", ""))
         return jsonify({"success": True, "message": "Pull request created successfully", "workflow": workflow.to_dict()}), 201
 
     else:

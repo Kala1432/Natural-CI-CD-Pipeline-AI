@@ -3,64 +3,52 @@ import api, { setAuthToken } from "../api"
 
 const AuthContext = createContext(null)
 
-const TOKEN_KEY = "hifi_token"
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
-  // On mount, restore session from localStorage
+  // On mount, restore session from cookie
   useEffect(() => {
-    const token = localStorage.getItem(TOKEN_KEY)
-    if (!token) {
-      setLoading(false)
-      return
-    }
-    setAuthToken(token)
     api.get("/auth/me")
       .then((res) => setUser(res.data.user))
       .catch(() => {
-        localStorage.removeItem(TOKEN_KEY)
-        setAuthToken(null)
+        setUser(null)
       })
       .finally(() => setLoading(false))
   }, [])
 
-  const _storeSession = useCallback((token, userData) => {
-    localStorage.setItem(TOKEN_KEY, token)
-    setAuthToken(token)
-    setUser(userData)
-  }, [])
-
   const login = useCallback(async (email, password) => {
     const res = await api.post("/auth/login", { email, password })
-    _storeSession(res.data.access_token, res.data.user)
+    setUser(res.data.user)
     return res.data.user
-  }, [_storeSession])
+  }, [])
 
   const register = useCallback(async (email, password, name) => {
     const res = await api.post("/auth/register", { email, password, name })
-    if (res.data.access_token) {
-      _storeSession(res.data.access_token, res.data.user)
+    if (res.data.user) {
+      setUser(res.data.user)
     }
     return res.data
-  }, [_storeSession])
+  }, [])
 
   const verifyEmail = useCallback(async (email, otp) => {
     const res = await api.post("/auth/verify-email", { email, otp })
-    _storeSession(res.data.access_token, res.data.user)
+    setUser(res.data.user)
     return res.data.user
-  }, [_storeSession])
+  }, [])
 
   const googleSignIn = useCallback(async (idToken) => {
     const res = await api.post("/auth/google", { id_token: idToken })
-    _storeSession(res.data.access_token, res.data.user)
+    setUser(res.data.user)
     return res.data.user
-  }, [_storeSession])
+  }, [])
 
-  const logout = useCallback(() => {
-    localStorage.removeItem(TOKEN_KEY)
-    setAuthToken(null)
+  const logout = useCallback(async () => {
+    try {
+      await api.post("/auth/logout")
+    } catch (e) {
+      console.error(e)
+    }
     setUser(null)
   }, [])
 

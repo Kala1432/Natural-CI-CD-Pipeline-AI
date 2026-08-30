@@ -17,6 +17,9 @@ import Analytics from "./pages/Analytics"
 import LogsViewer from "./pages/LogsViewer"
 import VerifyEmailPage from "./pages/VerifyEmailPage"
 import ForgotPasswordPage from "./pages/ForgotPasswordPage"
+import SimulationDashboard from "./pages/SimulationDashboard"
+import DeploymentMonitor from "./pages/DeploymentMonitor"
+import AdminDashboard from "./pages/AdminDashboard"
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -131,6 +134,14 @@ const App = () => {
         }
       />
       <Route
+        path="/projects/:id/simulations"
+        element={
+          <ProtectedRoute>
+            <AppShell><SimulationDashboard /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/analytics"
         element={
           <ProtectedRoute>
@@ -151,6 +162,22 @@ const App = () => {
         element={
           <ProtectedRoute>
             <AppShell><Settings /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/deployments"
+        element={
+          <ProtectedRoute>
+            <AppShell><DeploymentMonitor /></AppShell>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <ProtectedRoute>
+            <AppShell><AdminDashboard /></AppShell>
           </ProtectedRoute>
         }
       />

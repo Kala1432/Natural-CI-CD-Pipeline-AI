@@ -36,11 +36,13 @@ class User(db.Model):
     avatar_url = db.Column(db.String(512), nullable=True)
     role = db.Column(db.String(32), default="developer")
     email_verified = db.Column(db.Boolean, default=False, nullable=False)
+    is_admin = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     profile = db.relationship("UserProfile", uselist=False, backref="user", cascade="all, delete-orphan")
     email_otps = db.relationship("EmailOTP", backref="user", cascade="all, delete-orphan")
     github_connections = db.relationship("GithubConnection", backref="user", cascade="all, delete-orphan")
+    audit_logs = db.relationship("AuditLog", backref="user", cascade="all, delete-orphan")
 
 
 class GithubConnection(db.Model):
@@ -103,6 +105,12 @@ class Pipeline(db.Model):
     branch = db.Column(db.String(128), default="main")
     triggered_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime, nullable=True)
+    version_id = db.Column(db.Integer, nullable=False, default=1)
+    
+    __mapper_args__ = {
+        "version_id_col": version_id
+    }
+    
     repository = db.relationship("Repository", backref="pipelines")
 
 
@@ -124,6 +132,12 @@ class Deployment(db.Model):
     deployed_at = db.Column(db.DateTime, default=datetime.utcnow)
     finished_at = db.Column(db.DateTime, nullable=True)
     server_id = db.Column(db.Integer, db.ForeignKey("deployment_servers.id"), nullable=True)
+    version_id = db.Column(db.Integer, nullable=False, default=1)
+
+    __mapper_args__ = {
+        "version_id_col": version_id
+    }
+
     pipeline = db.relationship("Pipeline", backref="deployments")
     server = db.relationship("DeploymentServer", backref="deployments")
 
@@ -209,9 +223,15 @@ class Project(db.Model):
     status = db.Column(db.String(64), nullable=False, default="pending_analysis")
     # detected_stack stored as JSON string: {language, framework, package_manager, has_dockerfile, has_tests}
     _detected_stack = db.Column("detected_stack", db.Text, nullable=True)
+    readiness_score = db.Column(db.Integer, nullable=True)
     error_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    version_id = db.Column(db.Integer, nullable=False, default=1)
+
+    __mapper_args__ = {
+        "version_id_col": version_id
+    }
 
     creator = db.relationship("User", backref="projects")
     steps = db.relationship("AutomationStep", backref="project", cascade="all, delete-orphan", lazy="dynamic")
@@ -239,6 +259,7 @@ class Project(db.Model):
             "repo_name": self.repo_name,
             "default_branch": self.default_branch,
             "status": self.status,
+            "readiness_score": self.readiness_score,
             "detected_stack": self.detected_stack,
             "error_message": self.error_message,
             "created_by": self.created_by,
@@ -340,3 +361,31 @@ class DeploymentServer(db.Model):
     ssh_key_path = db.Column(db.String(512), nullable=True)
     region = db.Column(db.String(64), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class AuditLog(db.Model):
+    __tablename__ = "audit_logs"
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    action = db.Column(db.String(128), nullable=False, index=True)
+    resource_type = db.Column(db.String(64), nullable=True)
+    resource_id = db.Column(db.String(128), nullable=True)
+    status = db.Column(db.String(32), default="success", nullable=False)
+    details = db.Column(db.Text, nullable=True)
+    ip_address = db.Column(db.String(64), nullable=True)
+    user_agent = db.Column(db.String(512), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "resource_type": self.resource_type,
+            "resource_id": self.resource_id,
+            "status": self.status,
+            "details": json.loads(self.details) if self.details and (self.details.startswith("{") or self.details.startswith("[")) else self.details,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

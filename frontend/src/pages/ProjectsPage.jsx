@@ -17,6 +17,19 @@ const StatusBadge = ({ status }) => {
   return <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${m.cls}`}>{m.label}</span>
 }
 
+const ScoreBadge = ({ score }) => {
+  if (score === null || score === undefined) return <span className="text-slate-500">—</span>
+  let color = "text-emerald-400 bg-emerald-500/15 ring-emerald-500/20"
+  if (score < 50) color = "text-rose-400 bg-rose-500/15 ring-rose-500/20"
+  else if (score < 80) color = "text-yellow-400 bg-yellow-500/15 ring-yellow-500/20"
+  
+  return (
+    <span className={`inline-flex items-center justify-center rounded-md px-2 py-1 text-xs font-semibold ring-1 inset-ring ${color}`}>
+      {score}/100
+    </span>
+  )
+}
+
 const timeAgo = (iso) => {
   if (!iso) return "—"
   const diff = Date.now() - new Date(iso).getTime()
@@ -127,6 +140,7 @@ const ProjectsPage = () => {
               <tr className="border-b border-subtle bg-white/3">
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Repository</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Readiness</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Branch</th>
                 <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Updated</th>
                 <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
@@ -145,6 +159,9 @@ const ProjectsPage = () => {
                   </td>
                   <td className="px-5 py-4">
                     <StatusBadge status={p.status} />
+                  </td>
+                  <td className="px-5 py-4">
+                    <ScoreBadge score={p.readiness_score} />
                   </td>
                   <td className="px-5 py-4 text-slate-400">
                     {p.default_branch || "main"}
