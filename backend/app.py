@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 import mongoengine
@@ -28,7 +28,7 @@ from backend.tasks import configure_scheduler
 
 def create_app(test_config: dict = None):
     load_dotenv()
-    app = Flask(__name__, static_folder="../frontend/dist", static_url_path="")
+    app = Flask(__name__, static_folder="../frontend/dist", static_url_path="/assets")
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
@@ -137,6 +137,10 @@ def create_app(test_config: dict = None):
             "redis": {"status": redis_status, "error": redis_error},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
+
+    @app.route("/favicon.svg")
+    def favicon():
+        return send_from_directory(app.static_folder, "favicon.svg")
 
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
