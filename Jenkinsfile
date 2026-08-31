@@ -45,10 +45,15 @@ pipeline {
                 sshagent(credentials: ['ubuntu-1']) {
                     sh """
                     ssh -o StrictHostKeyChecking=no ubuntu@${EC2_HOST} '
+                    docker network create pipeline-network || true
+                    docker volume create pipeline-mongodb-data || true
+                    docker rm -f mongo || true
+                    docker run -d --name mongo --restart unless-stopped --network pipeline-network -v pipeline-mongodb-data:/data/db mongo:6
+                    sleep 5
                     docker pull ${IMAGE_NAME}
                     docker stop web || true
                     docker rm web || true
-                    docker run -d -p 80:5000 --name web ${IMAGE_NAME}
+                    docker run -d -p 80:5000 --name web --restart unless-stopped --network pipeline-network -e MONGODB_URI=mongodb://mongo:27017/pipeline_sh ${IMAGE_NAME}
                     '
                     """
                 }
