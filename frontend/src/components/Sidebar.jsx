@@ -47,6 +47,15 @@ const NAV = [
       </svg>
     ),
   },
+  {
+    to: "/jenkins",
+    label: "Jenkins setup",
+    icon: (
+      <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h16v14H4zM8 9h8M8 13h5M8 17h3" />
+      </svg>
+    ),
+  },
 ]
 
 import { useAuth } from "../hooks/AuthContext"

@@ -15,11 +15,13 @@ import GitHubSuccess from "./pages/GitHubSuccess"
 import PrConfirmPage from "./pages/PrConfirmPage"
 import Analytics from "./pages/Analytics"
 import LogsViewer from "./pages/LogsViewer"
+<<<<<<< HEAD
 import VerifyEmailPage from "./pages/VerifyEmailPage"
 import ForgotPasswordPage from "./pages/ForgotPasswordPage"
 import SimulationDashboard from "./pages/SimulationDashboard"
 import DeploymentMonitor from "./pages/DeploymentMonitor"
 import AdminDashboard from "./pages/AdminDashboard"
+import JenkinsSetup from "./pages/JenkinsSetup"
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -178,6 +180,13 @@ const App = () => {
         element={
           <ProtectedRoute>
             <AppShell><AdminDashboard /></AppShell>
+            }
+                />
+                <Route
+        path="/jenkins"
+        element={
+          <ProtectedRoute>
+            <AppShell><JenkinsSetup /></AppShell>
           </ProtectedRoute>
         }
       />
