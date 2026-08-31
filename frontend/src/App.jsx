@@ -15,7 +15,6 @@ import GitHubSuccess from "./pages/GitHubSuccess"
 import PrConfirmPage from "./pages/PrConfirmPage"
 import Analytics from "./pages/Analytics"
 import LogsViewer from "./pages/LogsViewer"
-<<<<<<< HEAD
 import VerifyEmailPage from "./pages/VerifyEmailPage"
 import ForgotPasswordPage from "./pages/ForgotPasswordPage"
 import SimulationDashboard from "./pages/SimulationDashboard"
@@ -180,9 +179,10 @@ const App = () => {
         element={
           <ProtectedRoute>
             <AppShell><AdminDashboard /></AppShell>
-            }
-                />
-                <Route
+          </ProtectedRoute>
+        }
+      />
+      <Route
         path="/jenkins"
         element={
           <ProtectedRoute>
