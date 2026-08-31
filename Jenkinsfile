@@ -48,7 +48,7 @@ pipeline {
                     docker pull ${IMAGE_NAME}
                     docker stop web || true
                     docker rm web || true
-                    docker run -d -p 80:80 --name web ${IMAGE_NAME}
+                    docker run -d -p 80:5000 --name web ${IMAGE_NAME}
                     '
                     """
                 }
