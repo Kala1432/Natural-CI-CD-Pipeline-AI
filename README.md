@@ -1,5 +1,5 @@
 # FluxForge — AI-powered CI/CD Pipeline Generator
-
+http://13.60.87.124:3001/register
 FluxForge is a production-ready, full-stack AI-powered DevOps automation platform. Built with Python, Flask, React.js, PostgreSQL, Redis, AWS, OpenAI, Docker, and GitHub Actions, it automates the repository intelligence, deployment configurations, and ML-assisted monitoring.
 
 > *Forge your pipelines with AI.*
