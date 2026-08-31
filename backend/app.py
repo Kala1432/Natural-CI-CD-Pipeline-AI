@@ -138,6 +138,10 @@ def create_app(test_config: dict = None):
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
 
+    @app.route("/assets/<path:filename>")
+    def assets(filename):
+        return send_from_directory(os.path.join(app.static_folder, "assets"), filename)
+
     @app.route("/favicon.svg")
     def favicon():
         return send_from_directory(app.static_folder, "favicon.svg")
