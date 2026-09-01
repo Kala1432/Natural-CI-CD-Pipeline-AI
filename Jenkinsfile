@@ -7,7 +7,9 @@ pipeline {
 
     environment {
         PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-        IMAGE_NAME = "niku1432/natural-ci-cd:latest"
+        IMAGE_REPO = "niku1432/natural-ci-cd-pipeline-ai"
+        IMAGE_TAG = "latest"
+        IMAGE_NAME = "${IMAGE_REPO}:${IMAGE_TAG}"
         EC2_HOST = "13.51.172.247"
     }
 
@@ -21,7 +23,7 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t $IMAGE_NAME .'
+                sh 'docker buildx build --platform linux/amd64 --push -t $IMAGE_NAME .'
             }
         }
 
@@ -58,7 +60,7 @@ pipeline {
                     docker pull ${IMAGE_NAME}
                     docker stop web || true
                     docker rm web || true
-                    docker run -d -p 8080:5000 --name web --restart unless-stopped --network pipeline-network -e MONGODB_URI=mongodb://mongo:27017/pipeline_sh ${IMAGE_NAME}
+                    docker run -d -p 8080:5000 -p 5001:5000 --name web --restart unless-stopped --network pipeline-network -e MONGODB_URI=mongodb://mongo:27017/pipeline_sh ${IMAGE_NAME}
                     '
                     """
                 }
