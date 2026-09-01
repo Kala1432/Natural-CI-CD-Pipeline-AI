@@ -49,13 +49,21 @@ def create_app(test_config: dict = None):
     app.logger.setLevel(log_level)
 
     CORS(app, supports_credentials=True, origins=[
-        r"http://localhost:\d+",
-        r"http://127\.0\.0\.1:\d+",
+        r"https?://localhost:\d+",
+        r"https?://127\.0\.0\.1:\d+",
+        r"https?://13\.51\.172\.247:\d+",
+        r"https?://([a-z0-9.-]+):\d+",
         "http://localhost:3000",
+        "http://localhost:3001",
         "http://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
         "http://localhost:4173",
-        "http://127.0.0.1:5000",
         "http://localhost:5000",
+        "http://localhost:5001",
+        "http://127.0.0.1:5000",
+        "http://127.0.0.1:5001",
+        "http://13.51.172.247:8080",
+        "http://13.51.172.247:5001",
     ])
     JWTManager(app)
 

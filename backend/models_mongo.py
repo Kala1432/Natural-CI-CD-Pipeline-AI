@@ -88,6 +88,11 @@ class DetectedStack(EmbeddedDocument):
             "package_manager": self.package_manager,
             "has_dockerfile": self.has_dockerfile,
             "has_tests": self.has_tests,
+            "has_ci": self.has_ci,
+            "test_framework": self.test_framework,
+            "lint_config": self.lint_config,
+            "node_version": self.node_version,
+            "python_version": self.python_version,
         }
 
 

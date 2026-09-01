@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom"
+import { useAuth } from "../hooks/AuthContext"
 
 const NAV = [
   {
@@ -57,8 +58,6 @@ const NAV = [
     ),
   },
 ]
-
-import { useAuth } from "../hooks/AuthContext"
 
 const Sidebar = () => {
   const { user } = useAuth()

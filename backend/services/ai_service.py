@@ -7,6 +7,7 @@ GEMINI_API_KEY is not set.
 """
 import logging
 import os
+import yaml
 
 from backend.config import Config
 
@@ -116,6 +117,72 @@ class AIService:
         self.provider = "gemini" if Config.GEMINI_API_KEY else ("openai" if Config.OPENAI_API_KEY else "none")
         if self.provider == "none":
             logger.warning("No AI provider configured. Set GEMINI_API_KEY or OPENAI_API_KEY in .env")
+
+    @property
+    def client(self):
+        """Return active client or boolean check for AI availability."""
+        if self.provider == "gemini":
+            return _get_gemini_client()
+        elif self.provider == "openai":
+            return _get_openai_client()
+        return None
+
+    def validate_pipeline(self, yaml_str: str) -> tuple[bool, str]:
+        """
+        Validate a generated or provided GitHub Actions workflow YAML.
+        Checks for basic YAML syntax, required 'jobs' root key, and unresolved placeholders.
+        """
+        if not yaml_str or not yaml_str.strip():
+            return False, "Empty YAML content"
+
+        # Check for unresolved placeholders
+        placeholders = ["your_token", "<placeholder>", "TODO", "REPLACE_ME", "your_secret", "YOUR_"]
+        for ph in placeholders:
+            if ph in yaml_str:
+                return False, f"Workflow contains unresolved placeholders: {ph}"
+
+        try:
+            parsed = yaml.safe_load(yaml_str)
+        except Exception as exc:
+            return False, f"Invalid YAML syntax: {exc}"
+
+        if not isinstance(parsed, dict):
+            return False, "Invalid YAML structure: root must be a mapping"
+
+        if "jobs" not in parsed or not parsed["jobs"]:
+            return False, "Validation failed: missing required 'jobs' key"
+
+        return True, yaml_str
+
+    def generate_pipeline(self, stack: dict, steps: list) -> str | None:
+        """Generate a complete GitHub Actions workflow YAML using the configured AI provider."""
+        if self.provider == "none":
+            return None
+
+        prompt = (
+            "You are an expert DevOps engineer. Generate a production-ready, valid GitHub Actions workflow YAML file "
+            f"for a project with the following detected stack: {stack} and automation steps: {steps}. "
+            "Return ONLY the valid YAML content without markdown fences, explanation, or comments."
+        )
+        try:
+            yaml_content = _call_llm(prompt, max_tokens=1500, temperature=0.2)
+            if yaml_content:
+                # Strip markdown code fences if present
+                cleaned = yaml_content.strip()
+                if cleaned.startswith("```"):
+                    lines = cleaned.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    cleaned = "\n".join(lines).strip()
+                is_valid, _ = self.validate_pipeline(cleaned)
+                if is_valid:
+                    return cleaned
+            return None
+        except Exception as exc:
+            logger.warning("AI pipeline generation failed: %s", exc)
+            return None
 
     def analyze_logs(self, logs: str):
         if not logs:

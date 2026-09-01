@@ -1,3 +1,5 @@
+import smtplib
+
 import pytest
 
 from backend.routes.auth import _otp_hash
@@ -133,6 +135,27 @@ def test_forgot_password_otp_resets_password(client, captured_otps):
         "password": "new-password",
     })
     assert new_login.status_code == 200
+
+
+def test_registration_falls_back_when_smtp_auth_fails(client, monkeypatch):
+    def fail_send(email, code, purpose):
+        raise smtplib.SMTPAuthenticationError(535, b"5.7.8 Username and Password not accepted")
+
+    monkeypatch.setattr("backend.routes.auth.send_otp_email", fail_send)
+
+    registration = client.post("/api/auth/register", json={
+        "name": "Fallback User",
+        "email": "fallback@example.com",
+        "password": "password123",
+    })
+    assert registration.status_code == 201
+    assert registration.get_json()["user"]["email"] == "fallback@example.com"
+
+    login = client.post("/api/auth/login", json={
+        "email": "fallback@example.com",
+        "password": "password123",
+    })
+    assert login.status_code == 200
 
 
 def test_forgot_password_does_not_reveal_unknown_email(client):

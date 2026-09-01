@@ -55,25 +55,24 @@ def _save_stack_and_steps(project_id: str, stack: dict, steps: list):
         project_repo = ProjectRepository()
         step_repo = AutomationStepRepository()
 
-        # Build DetachedStack for MongoEngine
+        # Build DetectedStack for MongoEngine
         detected_stack = DetectedStack(
             language=stack.get("language", ""),
             framework=stack.get("framework", ""),
             package_manager=stack.get("package_manager", ""),
             has_dockerfile=stack.get("has_dockerfile", False),
             has_tests=stack.get("has_tests", False),
+            has_ci=stack.get("has_ci", False),
+            test_framework=stack.get("test_framework", ""),
+            lint_config=stack.get("lint_config", ""),
+            node_version=stack.get("node_version", ""),
+            python_version=stack.get("python_version", ""),
         )
 
         project_repo.update_status(
             project_id,
             "analyzed",
-            detected_stack=detected_stack.to_dict() if hasattr(detected_stack, 'to_dict') else {
-                "language": stack.get("language", ""),
-                "framework": stack.get("framework", ""),
-                "package_manager": stack.get("package_manager", ""),
-                "has_dockerfile": stack.get("has_dockerfile", False),
-                "has_tests": stack.get("has_tests", False),
-            },
+            detected_stack=detected_stack.to_dict() if hasattr(detected_stack, 'to_dict') else stack,
             readiness_score=stack.get("readiness_score", 0),
         )
 

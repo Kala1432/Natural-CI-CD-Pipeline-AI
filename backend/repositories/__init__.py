@@ -199,7 +199,7 @@ class EmailOTPRepository(_BaseRepository):
     def purge_expired(self) -> int:
         """Delete all consumed or expired OTPs (used in tests; TTL handles prod)."""
         return self.document_class.objects(
-            (otp_expires_before := datetime.utcnow())  # noqa: F841
+            otp_expires_at__lt=datetime.utcnow()
         ).delete()
 
 
@@ -296,7 +296,7 @@ class RepositoryRepository(_BaseRepository):
         ).save()
 
     def mark_synced(self, repo_id) -> None:
-            self.document_class.objects(id=to_oid(repo_id)).update(set__last_synced=datetime.utcnow)
+        self.document_class.objects(id=to_oid(repo_id)).update(set__last_synced=datetime.utcnow)
 
 
 # ---------------------------------------------------------------------------

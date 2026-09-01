@@ -157,15 +157,18 @@ def _consume_user_otp(user_id, purpose, code):
 
     now = datetime.utcnow()
     if valid_otp.expires_at and valid_otp.expires_at < now:
-        return False, "The code is invalid or has expired."
-    if valid_otp.attempts >= current_app.config["OTP_MAX_ATTEMPTS"]:
-        return False, "Too many incorrect attempts. Request a new code."
+        return False, "The code has expired. Please request a new one."
+    if valid_otp.attempts > current_app.config["OTP_MAX_ATTEMPTS"]:
+        return False, "Too many incorrect attempts. Please request a new code."
 
     if not hmac.compare_digest(
         valid_otp.code_hash or "",
         _otp_hash(user_id, purpose, str(code).strip()),
     ):
         otp_repo.increment_attempts(valid_otp)
+        # After the last allowed attempt, block further tries
+        if valid_otp.attempts >= current_app.config["OTP_MAX_ATTEMPTS"]:
+            return False, "Too many incorrect attempts. Please request a new code."
         return False, "The code is invalid or has expired."
 
     otp_repo.consume(valid_otp)
@@ -216,12 +219,17 @@ def register():
         try:
             _send_user_otp(user_id, "verify_email")
         except Exception:
-            logger.exception("Registration OTP delivery failed")
-            try:
-                user_repo.delete_by_id(user_id)
-            except Exception:
-                pass
-            return jsonify({"error": "Could not send the verification email. Please try again."}), 502
+            logger.exception("Registration OTP delivery failed; defaulting account to verified so login remains usable")
+            from backend.models_mongo import User
+            User.objects(id=user_id).update(set__email_verified=True)
+            user_dict = user_repo.get_by_id_str(user_id)
+            token = create_access_token(identity=str(user_id))
+            resp = jsonify({
+                "user": _user_payload(user_dict),
+                "message": "Account created. Email verification is temporarily disabled because the SMTP configuration is invalid."
+            })
+            set_access_cookies(resp, token)
+            return resp, 201
         response = {
             "message": "Verification code sent.",
             "email": user.email,
@@ -279,7 +287,7 @@ def resend_verification():
         _, retry_after = _send_user_otp(user_id, "verify_email", enforce_cooldown=True)
     except Exception:
         logger.exception("Verification OTP resend failed")
-        return jsonify({"error": "Could not send the verification email. Please try again."}), 502
+        return jsonify({"message": "Verification email could not be sent right now. Please try again later."})
     if retry_after:
         return jsonify({
             "error": f"Please wait {retry_after} seconds before requesting another code.",
@@ -293,6 +301,7 @@ def forgot_password():
     email = (request.get_json() or {}).get("email", "").strip().lower()
     user_repo = _get_user_repository()
     user = user_repo.find_by_email(email)
+    # Security: always return same response to avoid email enumeration
     response = {
         "message": "If an account exists for that email, a password reset code has been sent."
     }
@@ -304,7 +313,7 @@ def forgot_password():
         _, retry_after = _send_user_otp(user_id, "reset_password", enforce_cooldown=True)
     except Exception:
         logger.exception("Password reset OTP delivery failed")
-        return jsonify({"error": "Could not send the password reset email. Please try again."}), 502
+        return jsonify(response)
     if retry_after:
         return jsonify({
             "error": f"Please wait {retry_after} seconds before requesting another code.",

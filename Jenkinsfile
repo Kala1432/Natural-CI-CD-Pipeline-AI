@@ -1,9 +1,14 @@
 pipeline {
     agent any
 
+    triggers {
+        githubPush()
+    }
+
     environment {
-        IMAGE_NAME = "prabhu463/natural-ci-cd:latest"
-        EC2_HOST = "13.60.252.218"
+        PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+        IMAGE_NAME = "niku1432/natural-ci-cd:latest"
+        EC2_HOST = "13.51.172.247"
     }
 
     stages {
@@ -53,7 +58,7 @@ pipeline {
                     docker pull ${IMAGE_NAME}
                     docker stop web || true
                     docker rm web || true
-                    docker run -d -p 80:5000 --name web --restart unless-stopped --network pipeline-network -e MONGODB_URI=mongodb://mongo:27017/pipeline_sh ${IMAGE_NAME}
+                    docker run -d -p 8080:5000 --name web --restart unless-stopped --network pipeline-network -e MONGODB_URI=mongodb://mongo:27017/pipeline_sh ${IMAGE_NAME}
                     '
                     """
                 }

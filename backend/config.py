@@ -51,7 +51,7 @@ class Config:
 
     GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
-    BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:5000")
+    BACKEND_URL = os.environ.get("BACKEND_URL", "http://13.51.172.247:5001")
 
     SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
     SMTP_PORT = int(os.environ.get("SMTP_PORT", 465))
@@ -88,7 +88,7 @@ class Config:
     AWS_EC2_AMI_ID = os.environ.get("AWS_EC2_AMI_ID", "ami-0c7217cdde317cfec")  # Ubuntu 22.04 LTS
     AWS_EC2_INSTANCE_TYPE = os.environ.get("AWS_EC2_INSTANCE_TYPE", "t3.micro")
 
-    FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+    FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://13.51.172.247:8080")
     LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
     # MongoDB / Atlas configuration (for dual-write migration phase)

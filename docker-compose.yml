@@ -10,10 +10,11 @@ services:
       - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
       - SECRET_KEY=hifi_flask_secret_change_in_prod
       - AWS_REGION=us-east-1
-      - FRONTEND_URL=http://localhost:3001
-      - BACKEND_URL=http://localhost:5001
+      - FRONTEND_URL=http://13.51.172.247:8080
+      - BACKEND_URL=http://13.51.172.247:5001
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
       - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
@@ -21,6 +22,8 @@ services:
       - SMTP_USERNAME=${SMTP_USERNAME:-}
       - SMTP_APP_PASSWORD=${SMTP_APP_PASSWORD:-}
       - EMAIL_FROM=${EMAIL_FROM:-}
+      - EMAIL_VERIFICATION_REQUIRED=${EMAIL_VERIFICATION_REQUIRED:-false}
+      - MAIL_SUPPRESS_SEND=${MAIL_SUPPRESS_SEND:-false}
       - OTP_EXPIRY_MINUTES=${OTP_EXPIRY_MINUTES:-10}
       - OTP_RESEND_COOLDOWN_SECONDS=${OTP_RESEND_COOLDOWN_SECONDS:-60}
       - OTP_MAX_ATTEMPTS=${OTP_MAX_ATTEMPTS:-5}
@@ -50,10 +53,11 @@ services:
       - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
       - SECRET_KEY=hifi_flask_secret_change_in_prod
       - AWS_REGION=us-east-1
-      - FRONTEND_URL=http://localhost:3001
-      - BACKEND_URL=http://localhost:5001
+      - FRONTEND_URL=http://13.51.172.247:8080
+      - BACKEND_URL=http://13.51.172.247:5001
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
@@ -70,6 +74,8 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        - VITE_GOOGLE_CLIENT_ID=${VITE_GOOGLE_CLIENT_ID:-}
     ports:
       - "3001:4173"
     environment:
@@ -83,6 +89,8 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: pipeline_sh
+    ports:
+      - "5432:5432"
     volumes:
       - db_data:/var/lib/postgresql/data
     healthcheck:
@@ -93,9 +101,13 @@ services:
 
   redis:
     image: redis:7
+    ports:
+      - "6379:6379"
 
   mongodb:
     image: mongo:6
+    ports:
+      - "27017:27017"
     volumes:
       - mongodb_data:/data/db
 

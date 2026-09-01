@@ -85,7 +85,7 @@ const JenkinsSetup = () => {
     .replace('EC2_PUBLIC_IP_OR_DNS', ec2Host || "EC2_PUBLIC_IP_OR_DNS")
     .replaceAll("docker-cred", dockerCredentialId || "docker-cred")
     .replaceAll("ubuntu-1", sshCredentialId || "ubuntu-1")
-    .replaceAll("ubuntu@${EC2_HOST}", `${sshUser || "ubuntu"}@${EC2_HOST}`),
+    .replaceAll("ubuntu@${EC2_HOST}", `${sshUser || "ubuntu"}@\${EC2_HOST}`),
     [dockerUsername, imageName, imageTag, ec2Host, sshUser, dockerCredentialId, sshCredentialId])
 
   const copyJenkinsfile = async () => {

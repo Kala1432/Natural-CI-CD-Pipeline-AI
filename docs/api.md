@@ -16,9 +16,7 @@ Base URL
 /auth/register
 ```
 
-Register user
-
----
+Register user.
 
 ## POST
 
@@ -26,19 +24,7 @@ Register user
 /auth/login
 ```
 
-Login user
-
----
-
-## POST
-
-```
-/auth/refresh
-```
-
-Refresh JWT
-
----
+Login user and set JWT cookie.
 
 ## POST
 
@@ -46,7 +32,23 @@ Refresh JWT
 /auth/logout
 ```
 
-Logout
+Logout user.
+
+## GET
+
+```
+/auth/me
+```
+
+Get the current authenticated user profile.
+
+## POST
+
+```
+/auth/verify-email
+```
+
+Verify email using OTP.
 
 ---
 
@@ -58,25 +60,159 @@ Logout
 /github/repos
 ```
 
-List repositories
-
----
+List repositories accessible to the connected GitHub account.
 
 ## POST
 
 ```
-/github/repos/sync
+/github/connect
 ```
 
-Synchronize repositories
+Connect a repository to the current user project.
+
+## POST
+
+```
+/github/generate-workflow
+```
+
+Generate a workflow template payload.
+
+## POST
+
+```
+/github/webhook
+```
+
+Receive GitHub push webhook and trigger re-analysis.
 
 ---
+
+# Projects
+
+## POST
+
+```
+/projects
+```
+
+Create a project from a GitHub repo URL.
 
 ## GET
 
 ```
-/github/repos/{id}
+/projects
 ```
+
+List projects for the authenticated user.
+
+## GET
+
+```
+/projects/{project_id}
+```
+
+Get project details, steps, and workflow.
+
+## GET
+
+```
+/projects/{project_id}/status
+```
+
+Check project analysis status.
+
+## POST
+
+```
+/projects/{project_id}/analyze
+```
+
+Trigger a fresh project analysis.
+
+---
+
+# Workflow
+
+## GET
+
+```
+/workflow/templates
+```
+
+Return workflow templates.
+
+## POST
+
+```
+/workflow/analyze
+```
+
+Analyze repository tech stack.
+
+## POST
+
+```
+/workflow/generate
+```
+
+Generate workflow YAML.
+
+## POST
+
+```
+/workflow/preview
+```
+
+Preview generated workflow.
+
+## POST
+
+```
+/workflow/commit
+```
+
+Commit workflow to the repository.
+
+---
+
+# Deployments
+
+## POST
+
+```
+/deploy/projects/{project_id}
+```
+
+Start deployment for a project.
+
+## GET
+
+```
+/deploy/all
+```
+
+List recent deployments.
+
+---
+
+# Admin
+
+## GET
+
+```
+/admin/stats
+```
+
+View admin statistics.
+
+## GET
+
+```
+/admin/audit-logs
+```
+
+View recent audit logs.
 
 Repository details
 
