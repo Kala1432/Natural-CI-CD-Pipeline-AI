@@ -28,7 +28,11 @@ from backend.tasks import configure_scheduler
 
 def create_app(test_config: dict = None):
     load_dotenv()
-    app = Flask(__name__, static_folder="../frontend/dist", static_url_path="/assets")
+    app = Flask(
+        __name__,
+        static_folder=os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")), "frontend", "dist"),
+        static_url_path="/"
+    )
     app.config.from_object(Config)
     if test_config:
         app.config.update(test_config)
@@ -157,15 +161,12 @@ def create_app(test_config: dict = None):
     @app.route("/", defaults={"path": ""})
     @app.route("/<path:path>")
     def frontend(path):
-        # Let API routes 404 normally
         if path.startswith("api/"):
             return jsonify({"error": "Not found"}), 404
-        # For all SPA routes, always serve index.html
-        import os as _os
-        index = _os.path.join(app.static_folder, "index.html")
-        if _os.path.exists(index):
+        index = os.path.join(app.static_folder, "index.html")
+        if os.path.exists(index):
             return app.send_static_file("index.html")
-        return jsonify({"error": "Frontend not built. Run: cd frontend && npm run build"}), 503
+        return jsonify({"error": "Frontend not built"}), 503
 
     return app
 
