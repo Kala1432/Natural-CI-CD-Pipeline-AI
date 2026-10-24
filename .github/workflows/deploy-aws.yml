@@ -4,105 +4,139 @@ on:
   push:
     branches:
       - main
-
+      - fast-deploy-ec2
   workflow_dispatch:
 
 concurrency:
   group: ec2-deployment
   cancel-in-progress: true
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
-  deploy:
-    name: Deploy to EC2
+  build-and-push:
+    name: Build & Push Image
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Deploy to EC2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag (lowercase)
+        id: image_tag
+        run: |
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE=ghcr.io/${REPO_LOWER}:latest" >> $GITHUB_OUTPUT
+
+      - name: Build and push production image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.production
+          push: true
+          tags: ${{ steps.image_tag.outputs.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v1.2.2
         with:
-          host: ${{ secrets.EC2_HOST }}
-          port: ${{ secrets.EC2_PORT }}
-          username: ${{ secrets.EC2_USERNAME }}
+          host: ${{ secrets.EC2_HOST || '3.26.195.178' }}
+          port: ${{ secrets.EC2_PORT || 22 }}
+          username: ${{ secrets.EC2_USERNAME || 'ubuntu' }}
           key: ${{ secrets.EC2_SSH_KEY }}
-
           script: |
             set -e
 
-            REPO_URL="https://github.com/Kala1432/Natural-CI-CD-Pipeline-AI.git"
+            REPO_URL="https://github.com/${{ github.repository }}.git"
             APP_DIR="$HOME/natural-ci-cd-pipeline-ai"
+            REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+            IMAGE_TAG="ghcr.io/${REPO_LOWER}:latest"
 
             echo "======================================"
-            echo "Starting deployment"
+            echo "Starting deployment on EC2 (3.26.195.178)"
             echo "======================================"
 
-            # --------------------------------------------
-            # Check Docker
-            # --------------------------------------------
-            echo "Checking Docker..."
+            # Ensure Docker is installed and socket is accessible
+            if ! command -v docker &>/dev/null; then
+              echo "Installing Docker..."
+              curl -fsSL https://get.docker.com | sh
+            fi
+            sudo usermod -aG docker $USER || true
+            sudo chmod 666 /var/run/docker.sock || true
 
-            docker --version
-            docker compose version
+            # Enable 2GB swap if not present (prevents low-memory lockups)
+            if ! swapon --show | grep -q "/swapfile"; then
+              echo "Setting up 2GB swap file to prevent OOM..."
+              sudo fallocate -l 2G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+              echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab || true
+            fi
 
-            # --------------------------------------------
-            # Clone repository on first deployment
-            # --------------------------------------------
+            # Clone or update repository
             if [ ! -d "$APP_DIR/.git" ]; then
               echo "Cloning repository..."
               git clone "$REPO_URL" "$APP_DIR"
-            else
-              echo "Repository already exists."
             fi
 
             cd "$APP_DIR"
+            TARGET_BRANCH="${{ github.ref_name }}"
+            echo "Updating repository to branch $TARGET_BRANCH..."
+            git fetch origin "$TARGET_BRANCH"
+            git reset --hard "origin/$TARGET_BRANCH"
 
-            # --------------------------------------------
-            # Get latest code
-            # --------------------------------------------
-            echo "Updating repository..."
+            # Login to GitHub Container Registry on EC2
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            git fetch origin
-            git reset --hard origin/main
+            export IMAGE_NAME="$IMAGE_TAG"
 
-            # --------------------------------------------
-            # Stop old containers
-            # --------------------------------------------
-            echo "Stopping existing containers..."
+            # Pull pre-built images (super fast, no compilation on server!)
+            echo "Pulling latest pre-built image..."
+            docker compose -f docker-compose.prod.yml pull backend celery_worker
 
-            docker compose down --remove-orphans || true
+            # Restart containers cleanly
+            echo "Restarting containers..."
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans
 
-            # --------------------------------------------
-            # Build and start application
-            # --------------------------------------------
-            echo "Building and starting application..."
+            # Remove dangling images
+            docker image prune -f
 
-            docker compose up -d --build
+            # Health validation
+            echo "Waiting for services to initialize..."
+            sleep 15
+            docker compose -f docker-compose.prod.yml ps
 
-            # --------------------------------------------
-            # Show deployment status
-            # --------------------------------------------
-            echo "Checking running containers..."
-
-            docker compose ps
-
-            # --------------------------------------------
-            # Basic validation
-            # --------------------------------------------
-            sleep 10
-
-            if docker compose ps --status running | grep -q .; then
+            if docker compose -f docker-compose.prod.yml ps --status running | grep -q backend; then
               echo "======================================"
-              echo "Deployment successful"
+              echo "Deployment Successful!"
+              echo "Application is live at: http://3.26.195.178:8080 or http://3.26.195.178"
               echo "======================================"
             else
               echo "======================================"
-              echo "Deployment failed"
+              echo "Deployment check failed - Container logs:"
               echo "======================================"
-
-              echo "Container logs:"
-              docker compose logs --tail=100
-
+              docker compose -f docker-compose.prod.yml logs --tail=100
               exit 1
             fi

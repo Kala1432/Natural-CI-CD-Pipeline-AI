@@ -1,0 +1,104 @@
+services:
+  backend:
+    image: ${IMAGE_NAME:-ghcr.io/kala1432/natural-ci-cd-pipeline-ai:latest}
+    restart: unless-stopped
+    ports:
+      - "80:5000"
+      - "5000:5000"
+      - "5001:5000"
+      - "8080:5000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/pipeline_sh
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/pipeline_sh}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-fifteenlakhplacementsikkesigutte}
+      - SECRET_KEY=${SECRET_KEY:-fifteenlakhplacementsikkebegabek}
+      - AWS_REGION=ap-south-1
+      - FRONTEND_URL=http://3.26.195.178:8080
+      - BACKEND_URL=http://3.26.195.178:5001
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-Ov23liIRw7fhzNJ0vAhK}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-8d6507391567e50a6ae5f84c078557b5b5ae00f9}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-248265376587-glmfaf8knuj728bo2s525jukb7vblrl2.apps.googleusercontent.com}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-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}
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USERNAME=${SMTP_USERNAME:-FluxForge}
+      - SMTP_APP_PASSWORD=${SMTP_APP_PASSWORD:-lijbzmobmlbklvdb}
+      - EMAIL_FROM=${EMAIL_FROM:-prabhuhondappagol@gmail.com}
+      - EMAIL_VERIFICATION_REQUIRED=${EMAIL_VERIFICATION_REQUIRED:-false}
+      - MAIL_SUPPRESS_SEND=${MAIL_SUPPRESS_SEND:-false}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-AQ.Ab8RN6Jtdugqljkg88N3wkxUnYpxm0EJiTc5x3XP7zFzAw4dOg}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  celery_worker:
+    image: ${IMAGE_NAME:-ghcr.io/kala1432/natural-ci-cd-pipeline-ai:latest}
+    restart: unless-stopped
+    entrypoint: []
+    command: ["celery", "-A", "backend.celery_app.celery_app", "worker", "--loglevel=INFO", "--pool=solo", "--concurrency=2"]
+    environment:
+      - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/pipeline_sh
+      - MONGODB_URI=${MONGODB_URI:-mongodb://mongodb:27017/pipeline_sh}
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-fifteenlakhplacementsikkesigutte}
+      - SECRET_KEY=${SECRET_KEY:-fifteenlakhplacementsikkebegabek}
+      - AWS_REGION=ap-south-1
+      - FRONTEND_URL=http://3.26.195.178:8080
+      - BACKEND_URL=http://3.26.195.178:5001
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-Ov23liIRw7fhzNJ0vAhK}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-8d6507391567e50a6ae5f84c078557b5b5ae00f9}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-AQ.Ab8RN6Jtdugqljkg88N3wkxUnYpxm0EJiTc5x3XP7zFzAw4dOg}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-flash-lite-latest}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: pipeline_sh
+    ports:
+      - "5432:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  mongodb:
+    image: mongo:6
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+volumes:
+  db_data:
+  redis_data:
+  mongodb_data:

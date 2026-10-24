@@ -10,7 +10,7 @@ pipeline {
         IMAGE_REPO = "niku1432/natural-ci-cd-pipeline-ai"
         IMAGE_TAG = "latest"
         IMAGE_NAME = "${IMAGE_REPO}:${IMAGE_TAG}"
-        EC2_HOST = "13.51.172.247"
+        EC2_HOST = "3.26.195.178"
     }
 
     stages {

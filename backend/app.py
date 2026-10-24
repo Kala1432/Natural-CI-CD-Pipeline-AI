@@ -52,10 +52,11 @@ def create_app(test_config: dict = None):
     )
     app.logger.setLevel(log_level)
 
-    CORS(app, supports_credentials=True, origins=[
+    cors_origins = [
         r"https?://localhost:\d+",
         r"https?://127\.0\.0\.1:\d+",
-        r"https?://13\.51\.172\.247:\d+",
+        r"https?://3\.26\.195\.178(:\d+)?",
+        r"https?://13\.51\.172\.247(:\d+)?",
         r"https?://([a-z0-9.-]+):\d+",
         "http://localhost:3000",
         "http://localhost:3001",
@@ -66,9 +67,20 @@ def create_app(test_config: dict = None):
         "http://localhost:5001",
         "http://127.0.0.1:5000",
         "http://127.0.0.1:5001",
+        "http://3.26.195.178",
+        "http://3.26.195.178:80",
+        "http://3.26.195.178:8080",
+        "http://3.26.195.178:5000",
+        "http://3.26.195.178:5001",
         "http://13.51.172.247:8080",
         "http://13.51.172.247:5001",
-    ])
+    ]
+    if app.config.get("FRONTEND_URL"):
+        cors_origins.append(app.config["FRONTEND_URL"].rstrip("/"))
+    if app.config.get("BACKEND_URL"):
+        cors_origins.append(app.config["BACKEND_URL"].rstrip("/"))
+
+    CORS(app, supports_credentials=True, origins=cors_origins)
     JWTManager(app)
 
     # Initialize MongoEngine with mongomock for testing / MongoDB Atlas for production

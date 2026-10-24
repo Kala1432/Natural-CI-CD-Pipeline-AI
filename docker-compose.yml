@@ -10,8 +10,8 @@ services:
       - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
       - SECRET_KEY=hifi_flask_secret_change_in_prod
       - AWS_REGION=us-east-1
-      - FRONTEND_URL=http://13.51.172.247:8080
-      - BACKEND_URL=http://13.51.172.247:5001
+      - FRONTEND_URL=http://3.26.195.178:8080
+      - BACKEND_URL=http://3.26.195.178:5001
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
@@ -53,8 +53,8 @@ services:
       - JWT_SECRET_KEY=hifi_jwt_secret_change_in_prod
       - SECRET_KEY=hifi_flask_secret_change_in_prod
       - AWS_REGION=us-east-1
-      - FRONTEND_URL=http://13.51.172.247:8080
-      - BACKEND_URL=http://13.51.172.247:5001
+      - FRONTEND_URL=http://3.26.195.178:8080
+      - BACKEND_URL=http://3.26.195.178:5001
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID:-}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET:-}
       - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
